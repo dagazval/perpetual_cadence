@@ -17,18 +17,18 @@
     "web": {
       "output": "server"
     },
-    "plugins": [
+    "plugins": {
       "expo-router",
-      [
+      {
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF"
         }
-      ],
+  },
       "expo-sqlite",
       "react-native-compressor",
       "expo-secure-store"
-    ],
+},
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
