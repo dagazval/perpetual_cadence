@@ -18,14 +18,16 @@
       "output": "server"
     },
     "plugins": [
-  "expo-router",
-  [
-    "expo-splash-screen",
-    {
-      "backgroundColor": "#1a0f2e"
-    }
-  ]
-],
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#1a0f2e"
+        }
+      ],
+      "expo-web-browser",
+      "expo-image"
+    ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
