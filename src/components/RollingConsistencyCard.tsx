@@ -1,130 +1,352 @@
-import React, { useState } from 'react';
-import { Sparkles, Calendar, Settings2, Check, Info } from 'lucide-react';
-import { dimensionalStore, DimInstrument } from '../db/dimensionalStore';
-import { audioTools } from '../utils/audioTools';
+/**
+ * Cantabile - RollingConsistencyCard Component
+ * Rolling 7-day consistency metric & polynomial XP curve (100 * L^2)
+ * 
+ * Strict non-punitive design: No streaks, no guilt, rolling window only
+ * Pure React Native primitives & lucide-react-native icons
+ */
+
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { Award, Zap, Calendar, TrendingUp } from 'lucide-react-native';
+import { db, DimInstrument } from '../database/schema';
 
 interface RollingConsistencyCardProps {
-  onUpdate: () => void;
+  instrument: DimInstrument;
 }
 
-export const RollingConsistencyCard: React.FC<RollingConsistencyCardProps> = ({ onUpdate }) => {
-  const consistency = dimensionalStore.getRollingConsistency();
-  const [isEditingTarget, setIsEditingTarget] = useState<boolean>(false);
-  const [targetDays, setTargetDays] = useState<number>(consistency.targetDays);
+export const RollingConsistencyCard: React.FC<RollingConsistencyCardProps> = ({
+  instrument,
+}) => {
+  const stats = db.getRolling7DayStats(instrument.instrument_id);
+  const levelInfo = db.getLevelProgress(instrument.current_xp);
 
-  const handleSaveTarget = () => {
-    audioTools.triggerHaptic('tap');
-    if (consistency.instrument) {
-      dimensionalStore.updateInstrumentTarget(consistency.instrument.instrument_id, targetDays);
-      setIsEditingTarget(false);
-      onUpdate();
-    }
-  };
+  const isTargetMet = stats.daysPracticed >= stats.targetDays;
 
   return (
-    <div className="p-5 rounded-2xl bg-[#2b1850] border border-purple-800/70 text-white shadow-md shadow-purple-950/40 space-y-4">
-      {/* Header with Title and Goal Configuration */}
-      <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-bold text-white">
-              Rolling 7-Day Consistency
-            </h3>
-            <span className="text-[11px] text-yellow-400 font-semibold">
-              {consistency.instrument?.name || 'Voice'}
-            </span>
-          </div>
-          <p className="text-xs text-purple-200">
-            Paced consistency without daily streak guilt or punitive resets
-          </p>
-        </div>
+    <View style={styles.cardContainer}>
+      {/* Header: Instrument & Level Badge */}
+      <View style={styles.headerRow}>
+        <View style={styles.titleWithIcon}>
+          <Calendar size={18} color="#60a5fa" />
+          <Text style={styles.cardTitle}>Rolling 7-Day Window</Text>
+        </View>
+        <View style={styles.levelBadge}>
+          <Award size={14} color="#f59e0b" />
+          <Text style={styles.levelBadgeText}>Lv. {levelInfo.currentLevel}</Text>
+        </View>
+      </View>
 
-        <button
-          onClick={() => setIsEditingTarget(!isEditingTarget)}
-          className="p-1.5 rounded-lg text-purple-300 hover:text-yellow-400 transition-colors cursor-pointer"
-          title="Adjust weekly target"
+      <Text style={styles.gentleSubtext}>
+        Measured over the past 7 days. Low friction, no broken streaks, no guilt.
+      </Text>
+
+      {/* Target Progress Counter */}
+      <View style={styles.metricRow}>
+        <View style={styles.targetProgressContainer}>
+          <Text style={styles.bigCountText}>
+            {stats.daysPracticed}
+            <Text style={styles.targetDenominatorText}> / {stats.targetDays}</Text>
+          </Text>
+          <Text style={styles.targetLabel}>Target Days This Week</Text>
+        </View>
+
+        <View
+          style={[
+            styles.statusPill,
+            isTargetMet ? styles.statusPillMet : styles.statusPillOngoing,
+          ]}
         >
-          <Settings2 className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Target Editor (Inline) */}
-      {isEditingTarget && (
-        <div className="p-3 rounded-xl bg-[#221342] border border-purple-800/60 flex items-center justify-between gap-3">
-          <div className="text-xs text-purple-200">
-            Target practice days per 7-day window:
-          </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={targetDays}
-              onChange={(e) => setTargetDays(parseInt(e.target.value, 10))}
-              className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-[#1a0f2e] border border-purple-700 text-white"
-            >
-              {[1, 2, 3, 4, 5, 6, 7].map((num) => (
-                <option key={num} value={num}>
-                  {num} {num === 1 ? 'day' : 'days'}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleSaveTarget}
-              className="px-3 py-1 text-xs font-bold rounded-lg bg-yellow-400 hover:bg-yellow-300 text-purple-950 cursor-pointer"
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 7-Day Rolling Visual Stones */}
-      <div className="grid grid-cols-7 gap-2">
-        {consistency.days.map((day) => (
-          <div
-            key={day.dateStr}
-            className={`flex flex-col items-center justify-center py-2.5 px-1 rounded-xl transition-all ${
-              day.active
-                ? 'bg-yellow-400 text-purple-950 font-bold shadow-md shadow-yellow-500/10'
-                : 'bg-purple-950/60 text-purple-400 border border-purple-900/60'
-            }`}
+          <TrendingUp
+            size={14}
+            color={isTargetMet ? '#10b981' : '#60a5fa'}
+          />
+          <Text
+            style={[
+              styles.statusPillText,
+              isTargetMet ? styles.statusPillTextMet : styles.statusPillTextOngoing,
+            ]}
           >
-            <span className="text-[10px] font-semibold tracking-wider">
-              {day.dayLabel}
-            </span>
-            <div className="my-1">
-              {day.active ? (
-                <Check className="w-3.5 h-3.5 stroke-[3]" />
-              ) : (
-                <div className="w-1.5 h-1.5 rounded-full bg-purple-700/60" />
-              )}
-            </div>
-            <span className="text-[10px] font-mono tabular-nums opacity-90">
-              {day.minutes > 0 ? `${day.minutes}m` : '—'}
-            </span>
-          </div>
-        ))}
-      </div>
+            {isTargetMet ? 'Target Reached' : `${stats.targetDays - stats.daysPracticed} more to goal`}
+          </Text>
+        </View>
+      </View>
 
-      {/* Progress & Affirmation Footer */}
-      <div className="pt-2 border-t border-purple-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-2 text-purple-200">
-          <span className="font-bold text-white">
-            {consistency.activeDaysCount} of {consistency.targetDays} target days
-          </span>
-          <span aria-hidden="true" className="text-purple-400">·</span>
-          <span className="text-yellow-300 font-medium">
-            {consistency.isTargetMet
-              ? 'Target achieved for this 7-day period!'
-              : `${consistency.targetDays - consistency.activeDaysCount} more session${
-                  consistency.targetDays - consistency.activeDaysCount > 1 ? 's' : ''
-                } to meet weekly goal.`}
-          </span>
-        </div>
+      {/* 7 Circular Day Dots */}
+      <View style={styles.dayDotsContainer}>
+        {stats.rollingDays.map((day, idx) => {
+          return (
+            <View key={`${day.dateStr}-${idx}`} style={styles.dayDotColumn}>
+              <View
+                style={[
+                  styles.dayCircle,
+                  day.isPracticed && styles.dayCirclePracticed,
+                  day.isToday && styles.dayCircleToday,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.dayCircleLetter,
+                    day.isPracticed && styles.dayCircleLetterPracticed,
+                  ]}
+                >
+                  {day.dayLetter}
+                </Text>
+              </View>
+              <Text
+                style={[
+                  styles.dayLabelSub,
+                  day.isToday && styles.dayLabelSubToday,
+                ]}
+              >
+                {day.isToday ? 'Today' : day.dateStr.slice(5)}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
 
-        <div className="text-[11px] text-purple-300/80 flex items-center gap-1">
-          <Info className="w-3 h-3 shrink-0 text-yellow-400" />
-          <span>Rolling window auto-evaluates daily</span>
-        </div>
-      </div>
-    </div>
+      {/* Polynomial Level Progression Curve (100 * L^2) */}
+      <View style={styles.levelCardSection}>
+        <View style={styles.levelProgressHeader}>
+          <View style={styles.levelTitleRow}>
+            <Zap size={14} color="#a855f7" />
+            <Text style={styles.levelProgressTitle}>Mastery Progression</Text>
+          </View>
+          <Text style={styles.xpFractionText}>
+            {instrument.current_xp} / {levelInfo.nextLevelRequiredXp} XP
+          </Text>
+        </View>
+
+        {/* Progress Bar */}
+        <View style={styles.progressBarTrack}>
+          <View
+            style={[
+              styles.progressBarFill,
+              { width: `${levelInfo.progressPercent}%` },
+            ]}
+          />
+        </View>
+
+        <View style={styles.levelFooterRow}>
+          <Text style={styles.levelCurveInfo}>
+            Level curve: 100 × L² (Polynomial growth)
+          </Text>
+          <Text style={styles.xpToNextText}>
+            {levelInfo.xpToNextLevel} XP to Level {levelInfo.currentLevel + 1}
+          </Text>
+        </View>
+      </View>
+    </View>
   );
 };
+
+const styles = StyleSheet.create({
+  cardContainer: {
+    backgroundColor: '#1e293b',
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#334155',
+    marginBottom: 16,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  titleWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#f8fafc',
+  },
+  levelBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  levelBadgeText: {
+    color: '#fbbf24',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  gentleSubtext: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 16,
+  },
+  metricRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  targetProgressContainer: {
+    flexDirection: 'column',
+  },
+  bigCountText: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#f8fafc',
+    letterSpacing: -0.5,
+  },
+  targetDenominatorText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  targetLabel: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  statusPillMet: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  statusPillOngoing: {
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.25)',
+  },
+  statusPillText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  statusPillTextMet: {
+    color: '#34d399',
+  },
+  statusPillTextOngoing: {
+    color: '#60a5fa',
+  },
+  dayDotsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  dayDotColumn: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  dayCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#1e293b',
+    borderWidth: 1.5,
+    borderColor: '#475569',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayCirclePracticed: {
+    backgroundColor: '#2563eb',
+    borderColor: '#60a5fa',
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+  },
+  dayCircleToday: {
+    borderColor: '#fbbf24',
+    borderWidth: 2,
+  },
+  dayCircleLetter: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  dayCircleLetterPracticed: {
+    color: '#ffffff',
+  },
+  dayLabelSub: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  dayLabelSubToday: {
+    color: '#fbbf24',
+    fontWeight: '700',
+  },
+  levelCardSection: {
+    backgroundColor: '#0f172a',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  levelProgressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  levelTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  levelProgressTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#cbd5e1',
+  },
+  xpFractionText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#c084fc',
+  },
+  progressBarTrack: {
+    height: 8,
+    backgroundColor: '#1e293b',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#9333ea',
+    borderRadius: 4,
+  },
+  levelFooterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  levelCurveInfo: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  xpToNextText: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+});

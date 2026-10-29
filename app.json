@@ -11,26 +11,16 @@
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE"
       },
-      "predictiveBackGestureEnabled": false,
       "package": "com.nomikkh.appPerpetuum"
     },
     "web": {
-      "output": "server"
+      "output": "single"
     },
     "plugins": [
-      "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "backgroundColor": "#1a0f2e"
-        }
-      ],
-      "expo-web-browser",
-      "expo-image"
+      "expo-sqlite"
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
     },
     "extra": {
       "router": {

@@ -1,444 +1,673 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Upload, FileAudio, Sparkles, Check, ArrowRight, Loader2, AlertCircle, BookmarkPlus, ChevronRight } from 'lucide-react';
-import { dimensionalStore, FactLessonSummary, DimTag } from '../db/dimensionalStore';
-import { audioTools } from '../utils/audioTools';
+/**
+ * Cantabile - AiLessonAnalyzer Component
+ * Audio Ingestion, Pedagogical Vocal Analysis & Tag Staging Review
+ * 
+ * Strict React Native Primitives & lucide-react-native icons
+ * Three collapsible accordions (Areas of Growth, Wins & Strengths, Technique & Mechanics Cues)
+ * Staging Review Area with [ ✓ Approve ] and [ ✕ Discard ]
+ */
+
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  ActivityIndicator,
+} from 'react-native';
+import {
+  UploadCloud,
+  ChevronDown,
+  ChevronUp,
+  Check,
+  X,
+  AlertCircle,
+  Sparkles,
+  Award,
+  Layers,
+  Zap,
+} from 'lucide-react-native';
+import { db, DimInstrument, DimTag, FactLessonSummary } from '../database/schema';
+import { pickLessonAudioFile, processLessonRecording } from '../services/lessonPipeline';
 
 interface AiLessonAnalyzerProps {
-  onSummaryAdded: () => void;
+  activeInstrument: DimInstrument;
+  onTagsUpdated: () => void;
 }
 
-export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({ onSummaryAdded }) => {
-  const [instrumentName, setInstrumentName] = useState<string>('Voice');
-  const [mode, setMode] = useState<'text' | 'audio'>('text');
-  const [transcriptInput, setTranscriptInput] = useState<string>('');
-  const [audioFile, setAudioFile] = useState<File | null>(null);
+export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
+  activeInstrument,
+  onTagsUpdated,
+}) => {
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [pipelineStage, setPipelineStage] = useState<string>('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Recording state
-  const [isRecording, setIsRecording] = useState<boolean>(false);
-  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  // Accordion open/collapse states
+  const [isGrowthOpen, setIsGrowthOpen] = useState<boolean>(true);
+  const [isWinsOpen, setIsWinsOpen] = useState<boolean>(true);
+  const [isMechanicsOpen, setIsMechanicsOpen] = useState<boolean>(true);
 
-  // Processing state
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [recentSummary, setRecentSummary] = useState<FactLessonSummary | null>(null);
-  const [stagedTags, setStagedTags] = useState<DimTag[]>([]);
+  // Refresh trigger
+  const [refreshSeed, setRefreshSeed] = useState<number>(0);
 
-  // Quota
-  const [quota, setQuota] = useState(dimensionalStore.getQuota());
+  // Data queries
+  const quota = db.getQuota();
+  const stagedTags = db.getStagedTags(activeInstrument.instrument_id);
+  const lessonSummaries = db.getLessonSummaries(activeInstrument.instrument_id);
+  const latestLesson: FactLessonSummary | undefined = lessonSummaries[0];
 
-  useEffect(() => {
-    refreshStagedTags();
-    fetchQuota();
-  }, [instrumentName]);
+  // Parse latest lesson content safely
+  let areasOfGrowth: string[] = [];
+  let winsAndStrengths: string[] = [];
+  let mechanicsCues: string[] = [];
 
-  const refreshStagedTags = () => {
-    const activeInst = dimensionalStore.getInstruments().find((i) => i.name === instrumentName);
-    if (activeInst) {
-      setStagedTags(dimensionalStore.getTags(activeInst.instrument_id, 'staged'));
-    }
-  };
-
-  const fetchQuota = async () => {
+  if (latestLesson) {
     try {
-      const res = await fetch('/api/quota');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.quota) {
-          setQuota(json.quota);
-        }
-      }
+      areasOfGrowth = JSON.parse(latestLesson.areas_of_growth);
     } catch {
-      setQuota(dimensionalStore.getQuota());
+      areasOfGrowth = [latestLesson.areas_of_growth];
     }
-  };
-
-  // Microphone recording
-  const handleStartRecording = async () => {
-    audioTools.triggerHaptic('tap');
-    audioChunksRef.current = [];
-    setRecordedBlob(null);
-    setAnalysisError(null);
-
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        setRecordedBlob(blob);
-      };
-
-      recorder.start();
-      setIsRecording(true);
-    } catch (err: any) {
-      console.error('Mic access error:', err);
-      setAnalysisError('Microphone access was denied or not supported on this device.');
+      winsAndStrengths = JSON.parse(latestLesson.wins_and_strengths);
+    } catch {
+      winsAndStrengths = [latestLesson.wins_and_strengths];
     }
-  };
-
-  const handleStopRecording = () => {
-    audioTools.triggerHaptic('tap');
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
-      setIsRecording(false);
-    }
-  };
-
-  // Run AI analysis
-  const handleAnalyze = async () => {
-    audioTools.triggerHaptic('tap');
-    setAnalysisError(null);
-    setIsAnalyzing(true);
-
     try {
-      let audioBase64: string | undefined;
-      let mimeType: string | undefined;
+      mechanicsCues = JSON.parse(latestLesson.technique_mechanics_cues);
+    } catch {
+      mechanicsCues = [latestLesson.technique_mechanics_cues];
+    }
+  }
 
-      // If audio file or recording is provided, downsample to 16kHz mono (react-native-compressor behavior)
-      const blobToProcess = recordedBlob || audioFile;
-      if (blobToProcess) {
-        const compressed = await audioTools.processAudioTo16kHzMonoBase64(blobToProcess);
-        audioBase64 = compressed.base64;
-        mimeType = compressed.mimeType;
-      }
+  const handleIngestAudio = async () => {
+    setErrorMessage(null);
+    try {
+      const file = await pickLessonAudioFile();
+      if (!file) return;
 
-      if (!audioBase64 && (!transcriptInput || transcriptInput.trim().length === 0)) {
-        throw new Error('Please enter lesson notes or record/upload audio first.');
-      }
+      setIsProcessing(true);
+      await processLessonRecording(
+        file,
+        activeInstrument.instrument_id,
+        activeInstrument.name,
+        (stage) => setPipelineStage(stage)
+      );
 
-      const res = await fetch('/api/analyze-lesson', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          instrumentName,
-          transcriptText: transcriptInput,
-          audioBase64,
-          mimeType,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.details || data.error || 'Lesson analysis failed');
-      }
-
-      const targetInst = dimensionalStore.getInstruments().find((i) => i.name === instrumentName);
-      if (!targetInst) throw new Error('Instrument not found');
-
-      // Record in Kimball Fact table
-      const summary = dimensionalStore.recordLessonSummary({
-        instrumentId: targetInst.instrument_id,
-        lessonDate: new Date().toISOString().slice(0, 10),
-        areasOfGrowth: data.analysis.areas_of_growth,
-        winsAndStrengths: data.analysis.wins_and_strengths,
-        techniqueMechanicsCues: data.analysis.technique_mechanics_cues,
-        transcriptText: data.analysis.transcript_text,
-        stagedTags: data.analysis.suggested_tags || [],
-      });
-
-      audioTools.triggerHaptic('success');
-      setRecentSummary(summary);
-      setTranscriptInput('');
-      setAudioFile(null);
-      setRecordedBlob(null);
-      refreshStagedTags();
-      fetchQuota();
-      onSummaryAdded();
+      setIsProcessing(false);
+      setPipelineStage('');
+      setRefreshSeed((prev) => prev + 1);
+      onTagsUpdated();
     } catch (err: any) {
-      console.error('Analysis error:', err);
-      setAnalysisError(err?.message || 'An error occurred while analyzing the lesson.');
-    } finally {
-      setIsAnalyzing(false);
+      setIsProcessing(false);
+      setPipelineStage('');
+      setErrorMessage(err.message || 'An error occurred during audio processing');
     }
   };
 
-  const handlePromoteTag = (tagId: string) => {
-    audioTools.triggerHaptic('tap');
-    dimensionalStore.promoteStagedTag(tagId);
-    refreshStagedTags();
-    onSummaryAdded();
+  const handleApproveTag = (tagId: string) => {
+    db.approveStagedTag(tagId);
+    setRefreshSeed((prev) => prev + 1);
+    onTagsUpdated();
   };
 
-  const handleDismissTag = (tagId: string) => {
-    audioTools.triggerHaptic('tap');
-    dimensionalStore.archiveTag(tagId);
-    refreshStagedTags();
+  const handleDiscardTag = (tagId: string) => {
+    db.discardStagedTag(tagId);
+    setRefreshSeed((prev) => prev + 1);
+    onTagsUpdated();
   };
 
   return (
-    <div className="space-y-4">
-      {/* Quota & Instrument Selector Card */}
-      <div className="p-4 rounded-2xl bg-[#2b1850] border border-purple-800/70 shadow-md shadow-purple-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-white">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-purple-200">
-            Instrument:
-          </span>
-          <div className="flex gap-1 bg-[#241442] p-1 rounded-xl border border-purple-800/50">
-            {['Voice', 'Piano', 'Oboe'].map((inst) => (
-              <button
-                key={inst}
-                onClick={() => setInstrumentName(inst)}
-                className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                  instrumentName === inst
-                    ? 'bg-yellow-400 text-purple-950 font-bold shadow-xs'
-                    : 'text-purple-300 hover:text-white'
-                }`}
-              >
-                {inst}
-              </button>
-            ))}
-          </div>
-        </div>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.contentContainer}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Quota & Cost Protection Banner */}
+      <View style={styles.quotaBanner}>
+        <View style={styles.quotaTextGroup}>
+          <Text style={styles.quotaTitle}>Quota & Cost Protection</Text>
+          <Text style={styles.quotaSub}>
+            Plan: {quota.plan_tier.replace('_', ' ').toUpperCase()} • Edge Whisper & LLM
+          </Text>
+        </View>
+        <View style={styles.quotaPill}>
+          <Text style={styles.quotaCountText}>
+            {quota.lessons_processed_this_month} / {quota.max_lessons_per_month}
+          </Text>
+          <Text style={styles.quotaUnitText}>Used</Text>
+        </View>
+      </View>
 
-        {/* Kimball User Quota Protection Display */}
-        <div className="flex items-center gap-2 text-xs text-purple-200">
-          <span>Monthly AI Quota:</span>
-          <span className="font-mono tabular-nums font-bold text-yellow-400">
-            {quota.lessons_processed_this_month}/{quota.max_lessons_per_month} used
-          </span>
-          <span className="text-[11px] text-yellow-300/90 font-medium">
-            ({Math.max(0, quota.max_lessons_per_month - quota.lessons_processed_this_month)} remaining)
-          </span>
-        </div>
-      </div>
-
-      {/* Input Form & Mode Selector */}
-      <div className="p-5 rounded-2xl bg-[#2b1850] border border-purple-800/70 shadow-md shadow-purple-950/40 space-y-4 text-white">
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <h3 className="text-sm font-bold text-white">
-              AI Pedagogical Lesson Analysis
-            </h3>
-            <p className="text-xs text-purple-200">
-              Extracts growth areas, anatomical mechanics cues, and dimensional focus tags
-            </p>
-          </div>
-
-          <div className="flex items-center gap-1 p-1 bg-[#241442] border border-purple-800/50 rounded-xl">
-            <button
-              onClick={() => setMode('text')}
-              className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                mode === 'text'
-                  ? 'bg-yellow-400 text-purple-950 font-bold shadow-xs'
-                  : 'text-purple-300 hover:text-white'
-              }`}
-            >
-              Notes / Transcript
-            </button>
-            <button
-              onClick={() => setMode('audio')}
-              className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                mode === 'audio'
-                  ? 'bg-yellow-400 text-purple-950 font-bold shadow-xs'
-                  : 'text-purple-300 hover:text-white'
-              }`}
-            >
-              Audio / Memo
-            </button>
-          </div>
-        </div>
-
-        {/* Text Input Mode */}
-        {mode === 'text' && (
-          <div className="space-y-2">
-            <textarea
-              rows={4}
-              value={transcriptInput}
-              onChange={(e) => setTranscriptInput(e.target.value)}
-              placeholder="Paste teacher notes, lesson reflections, or feedback here... (e.g., 'Work on soft palate arch during higher registration, keep breath continuous through French vowels, release lower jaw tension')"
-              className="w-full text-xs p-3.5 rounded-xl bg-[#1a0f2e] border border-purple-700/80 text-white placeholder:text-purple-300/40 focus:outline-hidden focus:ring-1 focus:ring-yellow-400"
-            />
-            <div className="flex justify-end">
-              <button
-                onClick={() =>
-                  setTranscriptInput(
-                    `In today's ${instrumentName} lesson, we worked on intervallic accuracy and breathing mechanics. The teacher noted that my rib cage expansion was grounded and tone was resonant, but suggested releasing the root of my tongue during vowel transitions. We drilled arpeggios focusing on maintaining soft palate lift and floating the high tessitura without pushing.`
-                  )
-                }
-                className="text-[11px] text-yellow-400 hover:text-yellow-300 underline cursor-pointer"
-              >
-                Insert sample {instrumentName} lesson notes
-              </button>
-            </div>
-          </div>
+      {/* Top Action Button: Ingest New Lesson */}
+      <TouchableOpacity
+        style={[
+          styles.ingestButton,
+          isProcessing && styles.ingestButtonDisabled,
+          quota.lessons_processed_this_month >= quota.max_lessons_per_month &&
+            styles.ingestButtonQuotaHit,
+        ]}
+        activeOpacity={0.8}
+        disabled={isProcessing}
+        onPress={handleIngestAudio}
+      >
+        {isProcessing ? (
+          <ActivityIndicator color="#ffffff" size="small" />
+        ) : (
+          <UploadCloud size={20} color="#ffffff" />
         )}
+        <Text style={styles.ingestButtonText}>
+          {isProcessing ? 'Processing Lesson...' : '+ Ingest New Lesson Recording'}
+        </Text>
+      </TouchableOpacity>
 
-        {/* Audio Recording / Upload Mode */}
-        {mode === 'audio' && (
-          <div className="p-4 rounded-xl bg-[#221342] border border-purple-800/60 space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                {!isRecording ? (
-                  <button
-                    onClick={handleStartRecording}
-                    className="px-3.5 py-2 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-purple-950 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Mic className="w-4 h-4" />
-                    <span>Record Lesson Memo</span>
-                  </button>
+      {/* Processing Progress Status */}
+      {isProcessing && (
+        <View style={styles.processingCard}>
+          <ActivityIndicator color="#60a5fa" size="small" />
+          <View style={styles.processingTextGroup}>
+            <Text style={styles.processingTitle}>Augmented Pedagogy Pipeline</Text>
+            <Text style={styles.processingStage}>{pipelineStage}</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Error Notice */}
+      {errorMessage && (
+        <View style={styles.errorCard}>
+          <AlertCircle size={18} color="#ef4444" />
+          <Text style={styles.errorText}>{errorMessage}</Text>
+        </View>
+      )}
+
+      {/* SECTION 1: FEEDBACK ACCORDIONS */}
+      <View style={styles.feedbackSection}>
+        <View style={styles.sectionHeaderRow}>
+          <Sparkles size={16} color="#60a5fa" />
+          <Text style={styles.sectionTitle}>
+            {activeInstrument.name} Lesson Critique & Mechanics
+          </Text>
+        </View>
+        <Text style={styles.sectionSubtext}>
+          Evaluated against classical vocal pedagogy and music theory definitions.
+        </Text>
+
+        {latestLesson ? (
+          <View style={styles.accordionsWrapper}>
+            {/* Accordion 1: Areas of Growth */}
+            <View style={styles.accordionCard}>
+              <TouchableOpacity
+                style={styles.accordionHeader}
+                activeOpacity={0.7}
+                onPress={() => setIsGrowthOpen(!isGrowthOpen)}
+              >
+                <View style={styles.accordionTitleRow}>
+                  <View style={[styles.accordionIconPill, styles.growthPill]}>
+                    <AlertCircle size={14} color="#f59e0b" />
+                  </View>
+                  <Text style={styles.accordionTitleText}>
+                    Areas of Growth & Instabilities
+                  </Text>
+                </View>
+                {isGrowthOpen ? (
+                  <ChevronUp size={18} color="#94a3b8" />
                 ) : (
-                  <button
-                    onClick={handleStopRecording}
-                    className="px-3.5 py-2 rounded-lg bg-red-600 text-white font-bold text-xs flex items-center gap-1.5 animate-pulse cursor-pointer"
-                  >
-                    <div className="w-2.5 h-2.5 rounded-sm bg-white" />
-                    <span>Stop Recording</span>
-                  </button>
+                  <ChevronDown size={18} color="#94a3b8" />
                 )}
+              </TouchableOpacity>
 
-                {recordedBlob && (
-                  <span className="text-xs text-yellow-300 font-semibold">
-                    Audio recorded ({Math.round(recordedBlob.size / 1024)} KB)
-                  </span>
-                )}
-              </div>
+              {isGrowthOpen && (
+                <View style={styles.accordionBody}>
+                  {areasOfGrowth.map((item, idx) => (
+                    <View key={idx} style={styles.bulletItem}>
+                      <View style={[styles.bulletDot, styles.bulletDotGrowth]} />
+                      <Text style={styles.bulletText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
 
-              <div className="text-xs text-purple-300">or upload audio file</div>
-
-              <label className="px-3 py-2 rounded-lg bg-[#2b1850] border border-purple-700 text-xs font-semibold text-white hover:bg-purple-800 cursor-pointer flex items-center gap-1.5 shrink-0">
-                <Upload className="w-3.5 h-3.5 text-yellow-400" />
-                <span>{audioFile ? audioFile.name.slice(0, 16) + '...' : 'Pick Audio File'}</span>
-                <input
-                  type="file"
-                  accept="audio/*"
-                  onChange={(e) => {
-                    if (e.target.files?.[0]) setAudioFile(e.target.files[0]);
-                  }}
-                  className="hidden"
-                />
-              </label>
-            </div>
-
-            <p className="text-[11px] text-purple-300/80">
-              Audio is downsampled in-browser to 16kHz mono (AAC/PCM) via Web Audio API before processing, exactly matching react-native-compressor.
-            </p>
-          </div>
-        )}
-
-        {/* Error Notification */}
-        {analysisError && (
-          <div className="p-3 rounded-xl bg-red-950/60 border border-red-700/80 text-red-200 text-xs flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
-            <span>{analysisError}</span>
-          </div>
-        )}
-
-        {/* Analyze Action Button */}
-        <div className="flex justify-end pt-2">
-          <button
-            onClick={handleAnalyze}
-            disabled={isAnalyzing || quota.lessons_processed_this_month >= quota.max_lessons_per_month}
-            className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-50 text-purple-950 text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-lg shadow-yellow-500/10 cursor-pointer"
-          >
-            {isAnalyzing ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-purple-950" />
-                <span>Analyzing Lesson with Gemini...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 fill-current" />
-                <span>Extract Growth, Mechanics & Tags</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Staged Tags Card (Kimball DDL chk_tag_length constraint enforcement) */}
-      {stagedTags.length > 0 && (
-        <div className="p-4 rounded-2xl bg-[#241442] border border-yellow-400/50 space-y-3 text-white">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <span className="text-xs font-bold text-yellow-400">
-                Staged Lesson Tags ({stagedTags.length})
-              </span>
-              <p className="text-[11px] text-purple-200">
-                Extracted by AI · Under 2 words constraint · Promote to practice stopwatch
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {stagedTags.map((tag) => (
-              <div
-                key={tag.tag_id}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#2b1850] border border-yellow-400/40 text-xs text-white shadow-xs"
+            {/* Accordion 2: Wins & Strengths */}
+            <View style={styles.accordionCard}>
+              <TouchableOpacity
+                style={styles.accordionHeader}
+                activeOpacity={0.7}
+                onPress={() => setIsWinsOpen(!isWinsOpen)}
               >
-                <span className="font-semibold">{tag.tag_name}</span>
-                <button
-                  onClick={() => handlePromoteTag(tag.tag_id)}
-                  title="Promote to Active"
-                  className="p-1 rounded hover:bg-yellow-400 hover:text-purple-950 text-yellow-400 transition-colors cursor-pointer"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleDismissTag(tag.tag_id)}
-                  title="Dismiss"
-                  className="p-1 rounded hover:bg-purple-800 text-purple-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
+                <View style={styles.accordionTitleRow}>
+                  <View style={[styles.accordionIconPill, styles.winsPill]}>
+                    <Award size={14} color="#10b981" />
+                  </View>
+                  <Text style={styles.accordionTitleText}>
+                    Wins & Executed Strengths
+                  </Text>
+                </View>
+                {isWinsOpen ? (
+                  <ChevronUp size={18} color="#94a3b8" />
+                ) : (
+                  <ChevronDown size={18} color="#94a3b8" />
+                )}
+              </TouchableOpacity>
+
+              {isWinsOpen && (
+                <View style={styles.accordionBody}>
+                  {winsAndStrengths.map((item, idx) => (
+                    <View key={idx} style={styles.bulletItem}>
+                      <View style={[styles.bulletDot, styles.bulletDotWins]} />
+                      <Text style={styles.bulletText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Accordion 3: Technique & Mechanics Cues */}
+            <View style={styles.accordionCard}>
+              <TouchableOpacity
+                style={styles.accordionHeader}
+                activeOpacity={0.7}
+                onPress={() => setIsMechanicsOpen(!isMechanicsOpen)}
+              >
+                <View style={styles.accordionTitleRow}>
+                  <View style={[styles.accordionIconPill, styles.cuesPill]}>
+                    <Zap size={14} color="#8b5cf6" />
+                  </View>
+                  <Text style={styles.accordionTitleText}>
+                    Technique & Mechanics Cues
+                  </Text>
+                </View>
+                {isMechanicsOpen ? (
+                  <ChevronUp size={18} color="#94a3b8" />
+                ) : (
+                  <ChevronDown size={18} color="#94a3b8" />
+                )}
+              </TouchableOpacity>
+
+              {isMechanicsOpen && (
+                <View style={styles.accordionBody}>
+                  {mechanicsCues.map((item, idx) => (
+                    <View key={idx} style={styles.bulletItem}>
+                      <View style={[styles.bulletDot, styles.bulletDotCues]} />
+                      <Text style={styles.bulletText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          </View>
+        ) : (
+          <View style={styles.emptyLessonCard}>
+            <Text style={styles.emptyLessonText}>
+              No lesson recordings ingested yet for {activeInstrument.name}. Tap the button above to ingest an audio file (.m4a or .mp3).
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* SECTION 2: STAGING REVIEW AREA (BOTTOM OF SCREEN) */}
+      <View style={styles.stagingSection}>
+        <View style={styles.sectionHeaderRow}>
+          <Layers size={16} color="#a855f7" />
+          <Text style={styles.sectionTitle}>Staged Focus Tags Review</Text>
+        </View>
+        <Text style={styles.sectionSubtext}>
+          LLM-extracted pedagogical tags (max 2 words, Title Case). Approve to add to Tab 1 practice carousel, or discard.
+        </Text>
+
+        {stagedTags.length === 0 ? (
+          <View style={styles.emptyStagedCard}>
+            <Text style={styles.emptyStagedText}>
+              All suggested tags reviewed! Staged tags will appear here automatically when a new lesson is analyzed.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.stagedTagsGrid}>
+            {stagedTags.map((tag: DimTag) => (
+              <View key={tag.tag_id} style={styles.stagedTagCard}>
+                <View style={styles.stagedTagInfo}>
+                  <Text style={styles.stagedTagName}>{tag.tag_name}</Text>
+                  <Text style={styles.stagedTagMeta}>
+                    {tag.source === 'lesson_extracted' ? 'AI Lesson' : 'Custom'} • 2-word limit
+                  </Text>
+                </View>
+
+                {/* Direct Touch Action Buttons */}
+                <View style={styles.actionButtonGroup}>
+                  <TouchableOpacity
+                    style={styles.approveButton}
+                    activeOpacity={0.7}
+                    onPress={() => handleApproveTag(tag.tag_id)}
+                  >
+                    <Check size={14} color="#ffffff" />
+                    <Text style={styles.actionButtonText}>Approve</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.discardButton}
+                    activeOpacity={0.7}
+                    onPress={() => handleDiscardTag(tag.tag_id)}
+                  >
+                    <X size={14} color="#ef4444" />
+                    <Text style={styles.discardButtonText}>Discard</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* Latest Analysis Results (Structured Kimball Fact Display) */}
-      {recentSummary && (
-        <div className="p-5 rounded-2xl bg-[#2b1850] border border-purple-800/70 shadow-md shadow-purple-950/40 space-y-4 text-white">
-          <div className="flex items-center justify-between border-b border-purple-800/60 pb-2">
-            <span className="text-xs font-bold text-white">
-              Fact Entity: fact_lesson_summaries
-            </span>
-            <span className="text-[11px] text-yellow-400 font-mono font-semibold">
-              Date: {recentSummary.lesson_date}
-            </span>
-          </div>
-
-          <div className="space-y-3 text-xs">
-            {/* Wins & Strengths */}
-            <div>
-              <div className="text-[11px] font-bold text-yellow-400 uppercase tracking-wider mb-1">
-                Wins & Strengths
-              </div>
-              <p className="text-purple-100 leading-relaxed bg-[#221342] p-3 rounded-xl border border-purple-800/60">
-                {recentSummary.wins_and_strengths}
-              </p>
-            </div>
-
-            {/* Areas of Growth */}
-            <div>
-              <div className="text-[11px] font-bold text-purple-300 uppercase tracking-wider mb-1">
-                Areas of Growth
-              </div>
-              <p className="text-purple-100 leading-relaxed bg-[#221342] p-3 rounded-xl border border-purple-800/60">
-                {recentSummary.areas_of_growth}
-              </p>
-            </div>
-
-            {/* Technique Mechanics Cues */}
-            <div>
-              <div className="text-[11px] font-bold text-yellow-300 uppercase tracking-wider mb-1">
-                Technique Mechanics & Somatic Cues
-              </div>
-              <p className="text-white leading-relaxed bg-[#221342] p-3 rounded-xl border border-purple-800/60 font-medium">
-                {recentSummary.technique_mechanics_cues}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+          </View>
+        )}
+      </View>
+    </ScrollView>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  contentContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 32,
+  },
+  quotaBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#1e293b',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#334155',
+    marginBottom: 14,
+  },
+  quotaTextGroup: {
+    flex: 1,
+  },
+  quotaTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#f8fafc',
+  },
+  quotaSub: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  quotaPill: {
+    backgroundColor: '#0f172a',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  quotaCountText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#60a5fa',
+  },
+  quotaUnitText: {
+    fontSize: 9,
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+  },
+  ingestButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 16,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 16,
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  ingestButtonDisabled: {
+    opacity: 0.7,
+  },
+  ingestButtonQuotaHit: {
+    backgroundColor: '#475569',
+  },
+  ingestButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  processingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+    gap: 12,
+    marginBottom: 16,
+  },
+  processingTextGroup: {
+    flex: 1,
+  },
+  processingTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#60a5fa',
+  },
+  processingStage: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    marginTop: 2,
+  },
+  errorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    gap: 8,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: '#f87171',
+    fontSize: 12,
+    flex: 1,
+  },
+  feedbackSection: {
+    marginBottom: 24,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#f8fafc',
+  },
+  sectionSubtext: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 12,
+  },
+  accordionsWrapper: {
+    gap: 10,
+  },
+  accordionCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#334155',
+    overflow: 'hidden',
+  },
+  accordionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 14,
+  },
+  accordionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  accordionIconPill: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  growthPill: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+  },
+  winsPill: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+  },
+  cuesPill: {
+    backgroundColor: 'rgba(139, 92, 246, 0.15)',
+  },
+  accordionTitleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#f1f5f9',
+    flex: 1,
+  },
+  accordionBody: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+    paddingTop: 10,
+    gap: 8,
+  },
+  bulletItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  bulletDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginTop: 6,
+  },
+  bulletDotGrowth: {
+    backgroundColor: '#f59e0b',
+  },
+  bulletDotWins: {
+    backgroundColor: '#10b981',
+  },
+  bulletDotCues: {
+    backgroundColor: '#a855f7',
+  },
+  bulletText: {
+    fontSize: 13,
+    color: '#cbd5e1',
+    lineHeight: 18,
+    flex: 1,
+  },
+  emptyLessonCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 14,
+    padding: 18,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  emptyLessonText: {
+    fontSize: 13,
+    color: '#94a3b8',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  stagingSection: {
+    marginBottom: 20,
+  },
+  emptyStagedCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 14,
+    padding: 18,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  emptyStagedText: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  stagedTagsGrid: {
+    gap: 10,
+  },
+  stagedTagCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1e293b',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#475569',
+  },
+  stagedTagInfo: {
+    flex: 1,
+  },
+  stagedTagName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#f8fafc',
+  },
+  stagedTagMeta: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  actionButtonGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  approveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    gap: 4,
+  },
+  actionButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  discardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    gap: 4,
+  },
+  discardButtonText: {
+    color: '#ef4444',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+});

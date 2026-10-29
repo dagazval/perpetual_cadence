@@ -1,450 +1,603 @@
+/**
+ * Cantabile - PracticeStopwatch Component
+ * 1-Tap Zero-Friction Stopwatch & Multi-Tag Matrix
+ * 
+ * Strict React Native Primitives & lucide-react-native icons
+ * Delta math clock (Date.now() - started_at) resilient against app switching & backgrounding
+ */
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, Square, Music2, Sparkles, Volume2, Clock, CheckCircle2, Sliders, ChevronDown } from 'lucide-react';
-import { dimensionalStore, DimInstrument, DimTag } from '../db/dimensionalStore';
-import { audioTools } from '../utils/audioTools';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  FlatList,
+  StyleSheet,
+} from 'react-native';
+import {
+  Play,
+  Square,
+  Sparkles,
+  Tag as TagIcon,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Flame,
+} from 'lucide-react-native';
+import { db, DimTag, DimInstrument } from '../database/schema';
 
 interface PracticeStopwatchProps {
-  onSessionFinished: () => void;
-  isOffline: boolean;
+  activeInstrument: DimInstrument;
+  onSessionSaved: () => void;
 }
 
-export const PracticeStopwatch: React.FC<PracticeStopwatchProps> = ({ onSessionFinished, isOffline }) => {
-  const [instruments, setInstruments] = useState<DimInstrument[]>([]);
-  const [selectedInstrument, setSelectedInstrument] = useState<DimInstrument | null>(null);
-  const [activeTags, setActiveTags] = useState<DimTag[]>([]);
-  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
-
-  // Timer states
+export const PracticeStopwatch: React.FC<PracticeStopwatchProps> = ({
+  activeInstrument,
+  onSessionSaved,
+}) => {
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
-  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null);
-
-  // Audio utility drawer
-  const [showTools, setShowTools] = useState<boolean>(false);
-  const [metronomeBpm, setMetronomeBpm] = useState<number>(100);
-  const [isMetronomeActive, setIsMetronomeActive] = useState<boolean>(false);
-  const [metronomeBeat, setMetronomeBeat] = useState<number>(0);
-  const [isDroneActive, setIsDroneActive] = useState<boolean>(false);
-  const [droneNote, setDroneNote] = useState<string>('A4');
-
-  // Finish celebration state
-  const [completionSummary, setCompletionSummary] = useState<{
-    duration: number;
-    xp: number;
-    instrument: string;
-    syncStatus: string;
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
+  const [sessionNotice, setSessionNotice] = useState<{
+    type: 'success' | 'discard';
+    message: string;
   } | null>(null);
 
-  const timerRef = useRef<number | null>(null);
+  // Delta math references
+  const startTimeRef = useRef<number | null>(null);
+  const timerIntervalRef = useRef<any>(null);
 
-  // Load initial data
+  // Load available tags for active instrument
+  const availableTags = db.getTagsForInstrument(activeInstrument.instrument_id);
+  const segmentTags = availableTags.filter((t) => t.tag_type === 'Session Segment');
+  const techniqueTags = availableTags.filter((t) => t.tag_type === 'Technique Focus');
+
+  // Initialize default 1-tap tag selection: default to 'Warm Up' segment
   useEffect(() => {
-    refreshData();
-  }, []);
-
-  const refreshData = () => {
-    const allInstruments = dimensionalStore.getInstruments();
-    setInstruments(allInstruments);
-    const lastActive = dimensionalStore.getLastActiveInstrument();
-    setSelectedInstrument(lastActive);
-
-    if (lastActive) {
-      loadTagsForInstrument(lastActive.instrument_id);
+    const warmUpTag = segmentTags.find((t) => t.tag_name.toLowerCase() === 'warm up');
+    if (warmUpTag && selectedTagIds.size === 0) {
+      setSelectedTagIds(new Set([warmUpTag.tag_id]));
     }
-  };
+  }, [activeInstrument.instrument_id]);
 
-  const loadTagsForInstrument = (instrumentId: string) => {
-    const availableTags = dimensionalStore.getTags(instrumentId, 'active');
-    setActiveTags(availableTags);
-
-    // Default to 'Warm Up' segment tag for zero-friction re-entry
-    const warmUpTag = availableTags.find((t) => t.tag_name.toLowerCase() === 'warm up');
-    if (warmUpTag && selectedTagIds.length === 0) {
-      setSelectedTagIds([warmUpTag.tag_id]);
-    }
-  };
-
-  // Timer interval
+  // Delta math timer tick
   useEffect(() => {
     if (isRunning) {
-      timerRef.current = window.setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-    } else if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+      timerIntervalRef.current = setInterval(() => {
+        if (startTimeRef.current) {
+          const deltaSec = Math.floor((Date.now() - startTimeRef.current) / 1000);
+          setElapsedSeconds(deltaSec);
+        }
+      }, 500);
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
     }
     return () => {
-      if (timerRef.current !== null) clearInterval(timerRef.current);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
   }, [isRunning]);
 
-  // Handle 1-Tap Quick Start
-  const handleStartPractice = () => {
-    audioTools.triggerHaptic('tap');
-    if (!isRunning) {
-      if (!sessionStartTime) {
-        setSessionStartTime(new Date());
-      }
-      setIsRunning(true);
-    }
-  };
-
-  const handlePausePractice = () => {
-    audioTools.triggerHaptic('tap');
-    setIsRunning(false);
-  };
-
-  const handleInstrumentChange = (inst: DimInstrument) => {
-    audioTools.triggerHaptic('tap');
-    setSelectedInstrument(inst);
-    dimensionalStore.setLastActiveInstrument(inst.instrument_id);
-    const instTags = dimensionalStore.getTags(inst.instrument_id, 'active');
-    setActiveTags(instTags);
-
-    const warmUp = instTags.find((t) => t.tag_name.toLowerCase() === 'warm up');
-    setSelectedTagIds(warmUp ? [warmUp.tag_id] : instTags.slice(0, 1).map((t) => t.tag_id));
-  };
-
+  // Toggle tag in bridge_session_tags without interrupting running clock
   const toggleTag = (tagId: string) => {
-    audioTools.triggerHaptic('tap');
-    setSelectedTagIds((prev) =>
-      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]
-    );
+    setSelectedTagIds((prev) => {
+      const updated = new Set(prev);
+      if (updated.has(tagId)) {
+        updated.delete(tagId);
+      } else {
+        updated.add(tagId);
+      }
+      return updated;
+    });
   };
 
-  // Finish practice session
-  const handleFinishPractice = () => {
-    if (elapsedSeconds < 5) {
-      // Gentle dismiss if under 5 seconds
-      setIsRunning(false);
-      setElapsedSeconds(0);
-      setSessionStartTime(null);
-      return;
-    }
-
-    audioTools.triggerHaptic('success');
-    setIsRunning(false);
-    audioTools.stopMetronome();
-    setIsMetronomeActive(false);
-    audioTools.stopDrone();
-    setIsDroneActive(false);
-
-    const endTime = new Date();
-    const startTime = sessionStartTime || new Date(endTime.getTime() - elapsedSeconds * 1000);
-
-    const session = dimensionalStore.recordSession({
-      instrumentId: selectedInstrument!.instrument_id,
-      durationSeconds: elapsedSeconds,
-      startedAt: startTime,
-      endedAt: endTime,
-      tagIds: selectedTagIds,
-      syncStatus: isOffline ? 'pending' : 'synced',
-    });
-
-    setCompletionSummary({
-      duration: elapsedSeconds,
-      xp: session.xp_earned,
-      instrument: selectedInstrument!.name,
-      syncStatus: session.sync_status,
-    });
-
+  const handleStartPractice = () => {
+    setSessionNotice(null);
+    startTimeRef.current = Date.now();
     setElapsedSeconds(0);
-    setSessionStartTime(null);
-    onSessionFinished();
+    setIsRunning(true);
   };
 
-  // Metronome toggle
-  const toggleMetronome = () => {
-    audioTools.triggerHaptic('tap');
-    if (isMetronomeActive) {
-      audioTools.stopMetronome();
-      setIsMetronomeActive(false);
-    } else {
-      setIsMetronomeActive(true);
-      audioTools.startMetronome(metronomeBpm, (beat) => {
-        setMetronomeBeat(beat % 4);
+  const handleStopPractice = () => {
+    if (!startTimeRef.current) return;
+    const endedAt = Date.now();
+    const duration = Math.floor((endedAt - startTimeRef.current) / 1000);
+    setIsRunning(false);
+
+    // End-of-Session Threshold Logic
+    if (duration < 300) {
+      // Under 5 minutes: Discard completely. Zero guilt, no DB write.
+      setSessionNotice({
+        type: 'discard',
+        message: `Practiced ${Math.floor(duration / 60)}m ${duration % 60}s. Sessions under 5 minutes are kept off the record—zero pressure!`,
       });
-    }
-  };
-
-  // Drone toggle
-  const toggleDrone = () => {
-    audioTools.triggerHaptic('tap');
-    if (isDroneActive) {
-      audioTools.stopDrone();
-      setIsDroneActive(false);
+      setElapsedSeconds(0);
+      startTimeRef.current = null;
     } else {
-      setIsDroneActive(true);
-      const freq = droneNote === 'A4' ? 440 : droneNote === 'Oboe 442' ? 442 : 261.63;
-      audioTools.playDrone(freq);
+      // 5 minutes or more: Save transactionally & award XP
+      try {
+        const result = db.recordSession({
+          instrument_id: activeInstrument.instrument_id,
+          started_at: new Date(startTimeRef.current).toISOString(),
+          ended_at: new Date(endedAt).toISOString(),
+          duration_seconds: duration,
+          tag_ids: Array.from(selectedTagIds),
+        });
+
+        setSessionNotice({
+          type: 'success',
+          message: `Great focus! Saved ${Math.floor(duration / 60)} min session. +${result.xpEarned} XP awarded!`,
+        });
+        setElapsedSeconds(0);
+        startTimeRef.current = null;
+        onSessionSaved();
+      } catch (err: any) {
+        setSessionNotice({
+          type: 'discard',
+          message: err.message || 'Error recording session',
+        });
+      }
     }
   };
 
+  // Clock Formatting (HH:MM:SS or MM:SS)
   const formatTime = (totalSec: number) => {
     const mins = Math.floor(totalSec / 60);
     const secs = totalSec % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs > 0) {
+      const remMins = mins % 60;
+      return `${String(hrs).padStart(2, '0')}:${String(remMins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
+  const isQualifyingThreshold = elapsedSeconds >= 300;
+  const currentProjectedXp = Math.floor(elapsedSeconds / 60) * 10;
+
   return (
-    <div className="space-y-4">
-      {/* Instrument Selection Header Bar */}
-      <div className="flex items-center justify-between pb-2 border-b border-purple-800/50">
-        <div className="flex items-center gap-1.5 p-1 bg-[#241442] rounded-xl border border-purple-800/40">
-          {instruments.map((inst) => (
-            <button
-              key={inst.instrument_id}
-              onClick={() => handleInstrumentChange(inst)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                selectedInstrument?.instrument_id === inst.instrument_id
-                  ? 'bg-yellow-400 text-purple-950 font-bold shadow-xs'
-                  : 'text-purple-300 hover:text-white'
-              }`}
-            >
-              {inst.name}
-            </button>
-          ))}
-        </div>
+    <View style={styles.container}>
+      {/* Timer Display Card */}
+      <View style={[styles.timerCard, isRunning && styles.timerCardActive]}>
+        <View style={styles.instrumentBadgeRow}>
+          <View style={styles.instrumentBadge}>
+            <Text style={styles.instrumentBadgeText}>
+              {activeInstrument.name}
+            </Text>
+          </View>
 
-        <div className="flex items-center gap-2 text-xs text-purple-200">
-          <span>Level {selectedInstrument?.current_level || 1}</span>
-          <span aria-hidden="true" className="text-purple-400">·</span>
-          <span className="font-mono tabular-nums text-yellow-400 font-semibold">{selectedInstrument?.current_xp || 0} XP</span>
-        </div>
-      </div>
+          {isRunning && (
+            <View style={styles.liveIndicator}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>DELTA MATH CLOCK</Text>
+            </View>
+          )}
+        </View>
 
-      {/* Main Practice Core Card */}
-      <div className="p-6 rounded-2xl bg-[#2b1850] border border-purple-800/70 shadow-lg shadow-purple-950/40 relative overflow-hidden">
-        {/* Ambient Warm Gradient Accent */}
-        <div className="absolute top-0 right-0 w-36 h-36 bg-yellow-400/5 rounded-full blur-3xl pointer-events-none" />
+        {/* Digital Display */}
+        <Text style={[styles.timerDigits, isRunning && styles.timerDigitsActive]}>
+          {formatTime(elapsedSeconds)}
+        </Text>
 
-        <div className="flex flex-col items-center justify-center text-center py-4">
-          <span className="text-xs font-medium text-yellow-300">
-            {isRunning ? 'Currently Practicing' : 'Ready to Practice'}
-          </span>
-
-          {/* Big Tabular Zero-Distraction Stopwatch */}
-          <div className="my-3 font-mono text-5xl sm:text-6xl font-bold tracking-tight text-white tabular-nums drop-shadow-xs">
-            {formatTime(elapsedSeconds)}
-          </div>
-
-          <p className="text-xs text-purple-200 max-w-xs mb-6">
-            {isRunning
-              ? 'Stay in flow. Every minute counts toward your rolling 7-day target.'
-              : `1-tap start for ${selectedInstrument?.name || 'Voice'} with Warm Up focus.`}
-          </p>
-
-          {/* Primary 1-Tap Action Controller in Natural Thumb Zone */}
-          <div className="flex items-center gap-3 w-full max-w-xs">
-            {!isRunning ? (
-              <button
-                onClick={handleStartPractice}
-                className="flex-1 h-13 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-purple-950 font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-yellow-500/20 active:scale-[0.98] transition-transform cursor-pointer"
-              >
-                <Play className="w-5 h-5 fill-current" />
-                <span>{elapsedSeconds > 0 ? 'Resume Practice' : 'Start Practice'}</span>
-              </button>
+        {/* Threshold Status & XP Indicator */}
+        <View style={styles.statusIndicatorRow}>
+          {isRunning ? (
+            isQualifyingThreshold ? (
+              <View style={styles.qualifyingBadge}>
+                <Flame size={14} color="#f59e0b" />
+                <Text style={styles.qualifyingText}>
+                  Qualifies for 7-day target • +{currentProjectedXp} XP
+                </Text>
+              </View>
             ) : (
-              <>
-                <button
-                  onClick={handlePausePractice}
-                  className="flex-1 h-13 rounded-xl bg-purple-900/80 hover:bg-purple-800 text-white font-semibold text-sm flex items-center justify-center gap-2 active:scale-[0.98] transition-transform border border-purple-700/60 cursor-pointer"
-                >
-                  <Pause className="w-5 h-5" />
-                  <span>Pause</span>
-                </button>
-                <button
-                  onClick={handleFinishPractice}
-                  className="flex-1 h-13 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-purple-950 font-bold text-sm flex items-center justify-center gap-2 shadow-md shadow-yellow-500/20 active:scale-[0.98] transition-transform cursor-pointer"
-                >
-                  <CheckCircle2 className="w-5 h-5" />
-                  <span>Finish</span>
-                </button>
-              </>
-            )}
+              <View style={styles.preQualifyingBadge}>
+                <Clock size={14} color="#94a3b8" />
+                <Text style={styles.preQualifyingText}>
+                  {Math.ceil((300 - elapsedSeconds) / 60)}m left to count for consistency (5m min)
+                </Text>
+              </View>
+            )
+          ) : (
+            <Text style={styles.readyPromptText}>
+              Tap start to begin. Defaults to Warm Up for zero-friction entry.
+            </Text>
+          )}
+        </View>
 
-            {elapsedSeconds > 0 && !isRunning && (
-              <button
-                onClick={handleFinishPractice}
-                title="Finish & Save Session"
-                className="h-13 px-4 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-purple-950 font-bold text-sm flex items-center justify-center gap-1 active:scale-[0.98] transition-transform cursor-pointer"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Save</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Focus Tags Attribution (Interactive Buttons, <= 2 words constraint) */}
-        <div className="mt-4 pt-4 border-t border-purple-800/60">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-white">
-              Active Focus Tags
-            </span>
-            <span className="text-[11px] text-purple-300/70">
-              Dimensional Attribution
-            </span>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            {activeTags.map((tag) => {
-              const isSelected = selectedTagIds.includes(tag.tag_id);
-              return (
-                <button
-                  key={tag.tag_id}
-                  onClick={() => toggleTag(tag.tag_id)}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-                    isSelected
-                      ? 'bg-yellow-400 text-purple-950 shadow-sm'
-                      : 'bg-purple-900/40 text-purple-200 border border-purple-700/50 hover:bg-purple-800/50'
-                  }`}
-                >
-                  {tag.tag_name}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Practice Utilities Drawer Toggle */}
-        <div className="mt-4 pt-3 border-t border-purple-800/60 flex items-center justify-between">
-          <button
-            onClick={() => setShowTools(!showTools)}
-            className="flex items-center gap-1.5 text-xs font-semibold text-purple-200 hover:text-yellow-300 transition-colors cursor-pointer"
+        {/* Primary Action Button (Thumb-accessible) */}
+        {!isRunning ? (
+          <TouchableOpacity
+            style={styles.primaryStartButton}
+            activeOpacity={0.8}
+            onPress={handleStartPractice}
           >
-            <Sliders className="w-3.5 h-3.5 text-yellow-400" />
-            <span>Practice Aids: Metronome & Tuning Drone</span>
-            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showTools ? 'rotate-180' : ''}`} />
-          </button>
-        </div>
-
-        {/* Expandable Audio Utilities Drawer */}
-        {showTools && (
-          <div className="mt-3 p-3.5 rounded-xl bg-[#221342] border border-purple-800/60 space-y-3">
-            {/* Metronome */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={toggleMetronome}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
-                    isMetronomeActive
-                      ? 'bg-yellow-400 text-purple-950'
-                      : 'bg-purple-900/80 text-white border border-purple-700/60 hover:bg-purple-800'
-                  }`}
-                >
-                  {isMetronomeActive ? 'Stop Metronome' : 'Start Metronome'}
-                </button>
-                <span className="font-mono text-xs tabular-nums text-yellow-300 font-semibold">
-                  {metronomeBpm} BPM
-                </span>
-                {isMetronomeActive && (
-                  <div className="flex gap-1 ml-1">
-                    {[0, 1, 2, 3].map((b) => (
-                      <div
-                        key={b}
-                        className={`w-2 h-2 rounded-full transition-colors ${
-                          metronomeBeat === b ? 'bg-yellow-400' : 'bg-purple-800'
-                        }`}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <input
-                type="range"
-                min="40"
-                max="208"
-                value={metronomeBpm}
-                onChange={(e) => {
-                  const bpm = parseInt(e.target.value, 10);
-                  setMetronomeBpm(bpm);
-                  if (isMetronomeActive) {
-                    audioTools.startMetronome(bpm, (beat) => setMetronomeBeat(beat % 4));
-                  }
-                }}
-                className="w-24 sm:w-32 accent-yellow-400"
-              />
-            </div>
-
-            {/* Tuning Reference Drone */}
-            <div className="flex items-center justify-between gap-3 pt-2 border-t border-purple-800/60">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={toggleDrone}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
-                    isDroneActive
-                      ? 'bg-yellow-400 text-purple-950'
-                      : 'bg-purple-900/80 text-white border border-purple-700/60 hover:bg-purple-800'
-                  }`}
-                >
-                  <Volume2 className="w-3.5 h-3.5 inline mr-1" />
-                  {isDroneActive ? 'Stop Drone' : 'Play Drone'}
-                </button>
-                <span className="text-xs text-purple-200">
-                  {droneNote} Reference Pitch
-                </span>
-              </div>
-
-              <div className="flex gap-1">
-                {(['A4', 'Oboe 442', 'C4'] as const).map((note) => (
-                  <button
-                    key={note}
-                    onClick={() => {
-                      setDroneNote(note);
-                      if (isDroneActive) {
-                        const freq = note === 'A4' ? 440 : note === 'Oboe 442' ? 442 : 261.63;
-                        audioTools.playDrone(freq);
-                      }
-                    }}
-                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors cursor-pointer ${
-                      droneNote === note
-                        ? 'bg-yellow-400 text-purple-950'
-                        : 'bg-purple-900/50 text-purple-200 border border-purple-700/40 hover:bg-purple-800'
-                    }`}
-                  >
-                    {note}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+            <Play size={22} color="#ffffff" fill="#ffffff" />
+            <Text style={styles.primaryStartButtonText}>Start Practice</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.primaryStopButton}
+            activeOpacity={0.8}
+            onPress={handleStopPractice}
+          >
+            <Square size={20} color="#ffffff" fill="#ffffff" />
+            <Text style={styles.primaryStopButtonText}>Stop Practice</Text>
+          </TouchableOpacity>
         )}
-      </div>
+      </View>
 
-      {/* Session Saved Modal / Toast (Zero-Guilt Celebration) */}
-      {completionSummary && (
-        <div className="p-4 rounded-xl bg-[#2b1850] border border-yellow-400/70 text-white flex items-center justify-between shadow-lg shadow-purple-950/60">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-yellow-400" />
-              <span className="text-sm font-bold text-white">
-                {completionSummary.instrument} Practice Recorded
-              </span>
-            </div>
-            <div className="text-xs text-purple-200 flex items-center gap-2">
-              <span>{Math.round(completionSummary.duration / 60)} minutes</span>
-              <span aria-hidden="true" className="text-purple-400">·</span>
-              <span className="text-yellow-300 font-semibold font-mono">+{completionSummary.xp} XP</span>
-              <span aria-hidden="true" className="text-purple-400">·</span>
-              <span className="text-purple-300/80">
-                {completionSummary.syncStatus === 'pending'
-                  ? 'Saved to Local SQLite'
-                  : 'Cloud Synced'}
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => setCompletionSummary(null)}
-            className="text-xs font-bold px-3.5 py-1.5 rounded-lg bg-yellow-400 text-purple-950 hover:bg-yellow-300 transition-colors cursor-pointer"
+      {/* Gentle Non-Punitive Notice Banner */}
+      {sessionNotice && (
+        <View
+          style={[
+            styles.noticeCard,
+            sessionNotice.type === 'success'
+              ? styles.noticeCardSuccess
+              : styles.noticeCardDiscard,
+          ]}
+        >
+          {sessionNotice.type === 'success' ? (
+            <CheckCircle2 size={18} color="#10b981" />
+          ) : (
+            <AlertCircle size={18} color="#94a3b8" />
+          )}
+          <Text
+            style={[
+              styles.noticeText,
+              sessionNotice.type === 'success'
+                ? styles.noticeTextSuccess
+                : styles.noticeTextDiscard,
+            ]}
           >
-            Done
-          </button>
-        </div>
+            {sessionNotice.message}
+          </Text>
+        </View>
       )}
-    </div>
+
+      {/* Multi-Tag Matrix: Outer Vertical ScrollView */}
+      <ScrollView
+        style={styles.matrixScrollView}
+        contentContainerStyle={styles.matrixScrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.matrixHeaderRow}>
+          <TagIcon size={16} color="#60a5fa" />
+          <Text style={styles.matrixTitle}>Session & Technique Tag Matrix</Text>
+        </View>
+        <Text style={styles.matrixSubtitle}>
+          Tap chips to tag on the fly without interrupting the timer clock.
+        </Text>
+
+        {/* Row 1: Session Segments */}
+        <View style={styles.categoryBlock}>
+          <Text style={styles.categoryLabel}>Session Segments</Text>
+          <FlatList
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            data={segmentTags}
+            keyExtractor={(item) => item.tag_id}
+            contentContainerStyle={styles.chipRowContainer}
+            renderItem={({ item }) => {
+              const isSelected = selectedTagIds.has(item.tag_id);
+              return (
+                <TouchableOpacity
+                  style={[styles.tagChip, isSelected && styles.tagChipSelected]}
+                  activeOpacity={0.7}
+                  onPress={() => toggleTag(item.tag_id)}
+                >
+                  <Text
+                    style={[
+                      styles.tagChipText,
+                      isSelected && styles.tagChipTextSelected,
+                    ]}
+                  >
+                    {item.tag_name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </View>
+
+        {/* Row 2: Technique Focus (Staged & Active) */}
+        <View style={styles.categoryBlock}>
+          <View style={styles.categoryLabelWithIcon}>
+            <Text style={styles.categoryLabel}>Technique Focus</Text>
+            <Sparkles size={12} color="#a855f7" />
+          </View>
+          <FlatList
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            data={techniqueTags}
+            keyExtractor={(item) => item.tag_id}
+            contentContainerStyle={styles.chipRowContainer}
+            renderItem={({ item }) => {
+              const isSelected = selectedTagIds.has(item.tag_id);
+              return (
+                <TouchableOpacity
+                  style={[
+                    styles.tagChip,
+                    styles.techniqueChip,
+                    isSelected && styles.techniqueChipSelected,
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => toggleTag(item.tag_id)}
+                >
+                  <Text
+                    style={[
+                      styles.tagChipText,
+                      isSelected && styles.techniqueChipTextSelected,
+                    ]}
+                  >
+                    {item.tag_name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </View>
+      </ScrollView>
+    </View>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  timerCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 24,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    marginBottom: 16,
+  },
+  timerCardActive: {
+    borderColor: '#3b82f6',
+    backgroundColor: '#0f172a',
+  },
+  instrumentBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 12,
+  },
+  instrumentBadge: {
+    backgroundColor: '#334155',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  instrumentBadgeText: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  liveIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#3b82f6',
+    marginRight: 6,
+  },
+  liveText: {
+    color: '#60a5fa',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  timerDigits: {
+    fontFamily: 'monospace',
+    fontSize: 64,
+    fontWeight: '800',
+    color: '#f8fafc',
+    letterSpacing: 2,
+    marginVertical: 6,
+  },
+  timerDigitsActive: {
+    color: '#60a5fa',
+  },
+  statusIndicatorRow: {
+    minHeight: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  qualifyingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 14,
+    gap: 6,
+  },
+  qualifyingText: {
+    color: '#fbbf24',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  preQualifyingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#334155',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 14,
+    gap: 6,
+  },
+  preQualifyingText: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  readyPromptText: {
+    color: '#64748b',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  primaryStartButton: {
+    backgroundColor: '#2563eb',
+    width: '100%',
+    paddingVertical: 18,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+  },
+  primaryStartButtonText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  primaryStopButton: {
+    backgroundColor: '#ef4444',
+    width: '100%',
+    paddingVertical: 18,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+  },
+  primaryStopButtonText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  noticeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 14,
+    marginBottom: 16,
+    gap: 10,
+  },
+  noticeCardSuccess: {
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  noticeCardDiscard: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  noticeText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  noticeTextSuccess: {
+    color: '#34d399',
+    fontWeight: '500',
+  },
+  noticeTextDiscard: {
+    color: '#94a3b8',
+  },
+  matrixScrollView: {
+    flex: 1,
+  },
+  matrixScrollContent: {
+    paddingBottom: 24,
+  },
+  matrixHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  matrixTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#f1f5f9',
+  },
+  matrixSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 16,
+  },
+  categoryBlock: {
+    marginBottom: 16,
+  },
+  categoryLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  categoryLabelWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  chipRowContainer: {
+    paddingVertical: 2,
+    gap: 8,
+  },
+  tagChip: {
+    backgroundColor: '#1e293b',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  tagChipSelected: {
+    backgroundColor: '#2563eb',
+    borderColor: '#3b82f6',
+  },
+  techniqueChip: {
+    borderColor: '#475569',
+  },
+  techniqueChipSelected: {
+    backgroundColor: '#7c3aed',
+    borderColor: '#8b5cf6',
+  },
+  tagChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94a3b8',
+  },
+  tagChipTextSelected: {
+    color: '#ffffff',
+  },
+  techniqueChipTextSelected: {
+    color: '#ffffff',
+  },
+});
