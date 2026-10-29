@@ -7,27 +7,28 @@
  * Staging Review Area with [ ✓ Approve ] and [ ✕ Discard ]
  */
 
-import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  ActivityIndicator,
-} from 'react-native';
-import {
-  UploadCloud,
+  AlertCircle,
+  Award,
+  Check,
   ChevronDown,
   ChevronUp,
-  Check,
-  X,
-  AlertCircle,
-  Sparkles,
-  Award,
   Layers,
+  Sparkles,
+  UploadCloud,
+  X,
   Zap,
 } from 'lucide-react-native';
+import React, { useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { db, DimInstrument, DimTag, FactLessonSummary } from '../database/schema';
 import { pickLessonAudioFile, processLessonRecording } from '../services/lessonPipeline';
 
@@ -84,8 +85,14 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
   const handleIngestAudio = async () => {
     setErrorMessage(null);
     try {
+      console.log('[DEBUG] Starting file picker...');
       const file = await pickLessonAudioFile();
-      if (!file) return;
+      console.log('[DEBUG] Picker returned:', file);
+
+      if (!file) {
+        Alert.alert('Picker Cancelled', 'No file was selected or returned.');
+        return;
+      }
 
       setIsProcessing(true);
       await processLessonRecording(
@@ -94,15 +101,11 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
         activeInstrument.name,
         (stage) => setPipelineStage(stage)
       );
-
-      setIsProcessing(false);
-      setPipelineStage('');
-      setRefreshSeed((prev) => prev + 1);
-      onTagsUpdated();
     } catch (err: any) {
+      console.error('[INGEST ERROR]:', err);
+      Alert.alert('Ingestion Error', err?.message || String(err));
+    } finally {
       setIsProcessing(false);
-      setPipelineStage('');
-      setErrorMessage(err.message || 'An error occurred during audio processing');
     }
   };
 

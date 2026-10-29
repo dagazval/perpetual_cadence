@@ -3,6 +3,7 @@
  * Offline-first, mobile native pipeline with audio downsampling & Edge Function integration
  */
 
+import * as DocumentPicker from 'expo-document-picker';
 import { db, FactLessonSummary } from '../database/schema';
 
 export interface LessonAnalysisResult {
@@ -21,40 +22,38 @@ export interface PickedAudioFile {
   mimeType: string;
 }
 
-/**
- * Mobile Document Picker wrapper
- * Adheres to expo-document-picker specification for Android file managers (.m4a, .mp3, audio/*)
- */
-export async function pickLessonAudioFile(): Promise<PickedAudioFile | null> {
-  // Check if native expo-document-picker is present in runtime
+export const pickLessonAudioFile = async () => {
   try {
-    // Web fallback for live preview / mobile web testing
-    if (typeof document !== 'undefined') {
-      return new Promise((resolve) => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'audio/*,.mp3,.m4a,.wav,.aac';
-        input.onchange = (e: any) => {
-          const file = e.target.files?.[0];
-          if (file) {
-            resolve({
-              name: file.name,
-              size: file.size,
-              uri: URL.createObjectURL(file),
-              mimeType: file.type || 'audio/m4a',
-            });
-          } else {
-            resolve(null);
-          }
-        };
-        input.click();
-      });
+    const result = await DocumentPicker.getDocumentAsync({
+      // Using '*/*' bypasses Android's strict audio intent filter bugs
+      type: '*/*',
+      copyToCacheDirectory: true,
+    });
+
+    console.log('[DEBUG] Full DocumentPicker Result:', JSON.stringify(result));
+
+    if (result.canceled) {
+      console.log('[DEBUG] User canceled the picker.');
+      return null;
     }
-  } catch (err) {
-    console.warn("Native file picker fallback:", err);
+
+    if (result.assets && result.assets.length > 0) {
+      const selected = result.assets[0];
+      console.log('[DEBUG] Asset selected:', selected.name, selected.uri);
+      return selected;
+    }
+
+    // Fallback for older Expo SDK schemas
+    if ((result as any).uri) {
+      return result;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('[DEBUG] DocumentPicker threw an exception:', error);
+    throw error;
   }
-  return null;
-}
+};
 
 /**
  * Audio Compression & Downsampling
