@@ -8,34 +8,33 @@
  * Offline-first SQLite dimensional star schema backing
  */
 
-import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  SafeAreaView,
-  StatusBar,
-} from 'react-native';
-import {
-  Timer,
   BarChart2,
   BookOpen,
-  WifiOff,
   Music,
-  CheckCircle2,
   ShieldCheck,
+  Timer
 } from 'lucide-react-native';
-import { db, DimInstrument } from './database/schema';
+import { useState } from 'react';
+import {
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { AiLessonAnalyzer } from './components/AiLessonAnalyzer';
+import { PracticeLog } from './components/PracticeLog';
 import { PracticeStopwatch } from './components/PracticeStopwatch';
 import { RollingConsistencyCard } from './components/RollingConsistencyCard';
-import { PracticeLog } from './components/PracticeLog';
-import { AiLessonAnalyzer } from './components/AiLessonAnalyzer';
+import { db, DimInstrument } from './database/schema';
 
 type ActiveTab = 'practice' | 'progress' | 'lessons';
 
 export default function App() {
+  
   const [activeTab, setActiveTab] = useState<ActiveTab>('practice');
   const [instruments, setInstruments] = useState<DimInstrument[]>(() =>
     db.getInstruments()
@@ -50,6 +49,7 @@ export default function App() {
     instruments.find((i) => i.instrument_id === activeInstrumentId) ||
     instruments[0];
 
+  
   const handleDataChanged = () => {
     setInstruments(db.getInstruments());
     setRefreshTrigger((prev) => prev + 1);
@@ -81,11 +81,11 @@ export default function App() {
 
           {/* Horizontal Instrument Switcher Pills */}
           <View style={styles.instrumentSelectorContainer}>
-            {instruments.map((inst) => {
-              const isActive = inst.instrument_id === activeInstrument.instrument_id;
-              return (
-                <TouchableOpacity
-                  key={inst.instrument_id}
+            {instruments.map((inst, index) => {
+               const isActive = inst.instrument_id === activeInstrument.instrument_id;
+            return (
+                  <TouchableOpacity
+                  key={`${inst.instrument_id}-${index}`}
                   style={[
                     styles.instrumentPill,
                     isActive && styles.instrumentPillActive,

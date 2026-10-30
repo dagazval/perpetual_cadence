@@ -408,9 +408,14 @@ export class CantabileDatabase {
   }
 
   // Dimension: Instruments
-  public getInstruments(): DimInstrument[] {
-    return [...this.instruments];
-  }
+public getInstruments(): DimInstrument[] {
+  const seen = new Set<string>();
+  return this.instruments.filter((inst) => {
+    if (seen.has(inst.instrument_id)) return false;
+    seen.add(inst.instrument_id);
+    return true;
+  });
+}
 
   public getInstrumentById(id: string): DimInstrument | undefined {
     return this.instruments.find(i => i.instrument_id === id);

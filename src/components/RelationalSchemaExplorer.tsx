@@ -1,5 +1,5 @@
+import { Check, Code2, Copy, Network, Play, Terminal } from 'lucide-react';
 import React, { useState } from 'react';
-import { Database, Play, Copy, Check, Table, Code2, Network, Terminal } from 'lucide-react';
 import { dimensionalStore } from '../db/dimensionalStore';
 import { audioTools } from '../utils/audioTools';
 
