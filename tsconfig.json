@@ -1,6 +1,8 @@
 {
+  
   "compilerOptions": {
     "target": "ES2022",
+     "strict": true,
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
     "module": "ESNext",
@@ -23,12 +25,15 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": [
-    "dist"
-  ],
   "extends": "expo/tsconfig.base",
+  "exclude": [
+    "dist",
+    "node_modules",
+    "supabase"
+  ],
   "include": [
     "**/*.ts",
     "**/*.tsx"
   ]
 }
+

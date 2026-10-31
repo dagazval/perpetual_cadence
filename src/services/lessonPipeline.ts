@@ -1,6 +1,6 @@
 /**
  * Cantabile - Lesson Audio Pipeline
- * Native document picker & Supabase Storage upload
+ * Native document picker, Supabase Storage upload, Edge Function trigger, & SQLite persistence
  */
 
 import * as DocumentPicker from 'expo-document-picker';
@@ -48,20 +48,26 @@ export const pickLessonAudioFile = async (): Promise<PickedAudioFile | null> => 
 
 /**
  * Upload Audio to Supabase Storage Bucket ('lesson-recordings')
+ * Uses React Native FormData rather than unsupported response.blob()
  */
 async function uploadAudioToSupabase(file: PickedAudioFile): Promise<string> {
   const timestamp = Date.now();
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath = `uploads/${timestamp}_${safeName}`;
 
-  console.log(`[STORAGE] Converting audio file to blob: ${file.uri}`);
-  const response = await fetch(file.uri);
-  const blob = await response.blob();
+  console.log(`[STORAGE] Preparing FormData for upload: ${filePath}`);
 
-  console.log(`[STORAGE] Uploading to 'lesson-recordings' at path: ${filePath}`);
+  const formData = new FormData();
+  formData.append('', {
+    uri: file.uri,
+    name: safeName,
+    type: file.mimeType || 'audio/m4a',
+  } as any);
+
+  console.log(`[STORAGE] Uploading to 'lesson-recordings'...`);
   const { data, error } = await supabase.storage
     .from('lesson-recordings')
-    .upload(filePath, blob, {
+    .upload(filePath, formData, {
       contentType: file.mimeType || 'audio/m4a',
       upsert: true,
     });
@@ -95,12 +101,44 @@ export async function processLessonRecording(
     );
   }
 
-  if (onProgress) onProgress('Uploading to Supabase Storage (lesson-recordings)...');
+  if (onProgress) onProgress('Uploading audio to Supabase Storage...');
   const uploadedPath = await uploadAudioToSupabase(file);
 
-  if (onProgress) onProgress('File uploaded. Awaiting Edge Function analysis...');
-  console.log(`[PIPELINE] Ready to trigger processing for storage path: ${uploadedPath} (${instrumentName})`);
+  if (onProgress) onProgress('Transcribing & analyzing with Gemini in cloud...');
+  console.log(`[PIPELINE] Invoking Edge Function for path: ${uploadedPath} (${instrumentName})`);
 
-  // Returns null for now until Edge Function is wired to populate real summary rows
-  return null;
+  const { data, error } = await supabase.functions.invoke('process-lesson-audio', {
+    body: {
+      filePath: uploadedPath,
+      instrumentName,
+      instrumentId,
+      userId: '00000000-0000-0000-0000-000000000001',
+    },
+  });
+
+  if (error) {
+    console.error('[EDGE FUNCTION ERROR]', error);
+    throw new Error(`Cloud analysis failed: ${error.message}`);
+  }
+
+  if (!data || !data.analysis) {
+    throw new Error('Edge Function returned invalid or empty analysis payload.');
+  }
+
+  if (onProgress) onProgress('Saving critique and staging tags in local database...');
+
+  const analysis = data.analysis;
+
+  // Persist into local SQLite database
+  const summary = db.recordLessonSummary({
+    instrument_id: instrumentId,
+    lesson_date: new Date().toISOString().slice(0, 10),
+    areas_of_growth: analysis.context_and_feedback?.areas_of_growth || [],
+    wins_and_strengths: analysis.context_and_feedback?.wins_and_strengths || [],
+    technique_mechanics_cues: analysis.technique_and_mechanics_cues || [],
+    suggested_focus_tags: analysis.suggested_focus_tags || [],
+    transcript_text: `Ingested ${file.name}. Teacher and student evaluated for ${instrumentName}.`,
+  });
+
+  return summary;
 }

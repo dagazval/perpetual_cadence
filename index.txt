@@ -1,0 +1,219 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.8";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { Buffer } from "node:buffer";
+
+const VOCAL_PRIMER = `
+Music lesson terminology to prioritize:
+bel canto, passaggio, pharyngeal voice, appoggio, mimesis, solfège, legato, staccato,
+arpeggio, contralto, chest voice, head voice, mix voice, pitch accuracy, resonance,
+larynx position, breath support, diaphragm activation, vowel modification, formant tuning.
+`;
+
+const SYSTEM_PROMPT = `
+You are an expert music pedagogue and data extraction engine evaluating an audio lesson recording.
+Evaluate teacher critiques and student execution against classical vocal pedagogy and music theory standards.
+
+You MUST return STRICT JSON adhering precisely to this structure:
+{
+  "context_and_feedback": {
+    "areas_of_growth": ["string: constructive critiques, pitch/air adjustments, instabilities"],
+    "wins_and_strengths": ["string: noticeable improvements, resonant tone, correct technique"]
+  },
+  "technique_and_mechanics_cues": ["string: specific physical drills, vocal adjustments, exercises"],
+  "suggested_focus_tags": ["string: maximum 2 words, Title Case, concrete practice cues. e.g. 'Vowel Space', 'Passaggio Shift'"]
+}
+`;
+
+Deno.serve(async (req) => {
+  // CORS Preflight
+  if (req.method === "OPTIONS") {
+    return new Response("ok", {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+      },
+    });
+  }
+
+  try {
+    const { filePath, instrumentName, instrumentId, userId } = await req.json();
+
+    if (!filePath || !instrumentId) {
+      return new Response(JSON.stringify({ error: "Missing filePath or instrumentId" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const geminiApiKey = Deno.env.get("GEMINI_API_KEY")!;
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const targetUserId = userId || "00000000-0000-0000-0000-000000000001";
+
+    // 1. Quota Verification
+    const { data: quota } = await supabase
+      .from("user_quotas")
+      .select("*")
+      .eq("user_id", targetUserId)
+      .single();
+
+    if (quota && quota.lessons_processed_this_month >= quota.max_lessons_per_month) {
+      return new Response(
+        JSON.stringify({ error: "Monthly lesson quota exceeded (402)" }),
+        { status: 402, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // 2. Download audio file from bucket
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from("lesson-recordings")
+      .download(filePath);
+
+    if (downloadError || !fileData) {
+      throw new Error(`Failed to download audio: ${downloadError?.message}`);
+    }
+
+// Convert audio file bytes to Base64 efficiently via Buffer
+    const arrayBuffer = await fileData.arrayBuffer();
+    const base64Audio = Buffer.from(arrayBuffer).toString("base64");
+
+    // 3. Call Gemini Multimodal API
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
+
+    const geminiRes = await fetch(geminiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: `${SYSTEM_PROMPT}\n\nVocabulary Primer:\n${VOCAL_PRIMER}\n\nInstrument being analyzed: ${instrumentName || "Voice"}`,
+              },
+              {
+                inline_data: {
+                  mime_type: "audio/mp4",
+                  data: base64Audio,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          response_mime_type: "application/json",
+          temperature: 0.2,
+        },
+      }),
+    });
+
+    if (!geminiRes.ok) {
+      const errText = await geminiRes.text();
+      throw new Error(`Gemini API error (${geminiRes.status}): ${errText}`);
+    }
+
+    const geminiData = await geminiRes.json();
+    const rawJsonText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+    const analysis = JSON.parse(rawJsonText);
+
+    const lessonDate = new Date().toISOString().slice(0, 10);
+
+    // 4. Insert into fact_lesson_summaries
+    const { data: summaryRow, error: summaryErr } = await supabase
+      .from("fact_lesson_summaries")
+      .insert({
+        user_id: targetUserId,
+        instrument_id: instrumentId,
+        lesson_date: lessonDate,
+        areas_of_growth: JSON.stringify(analysis.context_and_feedback?.areas_of_growth || []),
+        wins_and_strengths: JSON.stringify(analysis.context_and_feedback?.wins_and_strengths || []),
+        technique_mechanics_cues: JSON.stringify(analysis.technique_and_mechanics_cues || []),
+        transcript_text: `Evaluated ${instrumentName || "instrument"} lesson audio.`,
+      })
+      .select()
+      .single();
+
+    if (summaryErr) throw summaryErr;
+
+    // 5. Itemize comments into fact_teacher_comments
+    const commentCategories = [
+      { key: "areas_of_growth", items: analysis.context_and_feedback?.areas_of_growth || [] },
+      { key: "wins_and_strengths", items: analysis.context_and_feedback?.wins_and_strengths || [] },
+      { key: "technique_mechanics_cues", items: analysis.technique_and_mechanics_cues || [] },
+    ];
+
+    const commentInserts = [];
+    for (const cat of commentCategories) {
+      for (const text of cat.items) {
+        commentInserts.push({
+          lesson_id: summaryRow.lesson_id,
+          instrument_id: instrumentId,
+          user_id: targetUserId,
+          card_category: cat.key,
+          comment_text: String(text).replace(/<[^>]*>?/gm, "").trim(),
+          comment_date: lessonDate,
+        });
+      }
+    }
+
+    if (commentInserts.length > 0) {
+      await supabase.from("fact_teacher_comments").insert(commentInserts);
+    }
+
+    // 6. Stage tags into dim_tags (status = 'staged')
+    const suggestedTags = analysis.suggested_focus_tags || [];
+    for (const rawTag of suggestedTags) {
+      const words = String(rawTag).trim().split(/\s+/).slice(0, 2);
+      const titleCaseTag = words
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(" ");
+
+      if (titleCaseTag) {
+        await supabase.from("dim_tags").insert({
+          user_id: targetUserId,
+          instrument_id: instrumentId,
+          tag_name: titleCaseTag,
+          tag_type: "Technique Focus",
+          status: "staged",
+          source: "lesson_extracted",
+        });
+      }
+    }
+
+    // 7. Increment user quota count
+    if (quota) {
+      await supabase
+        .from("user_quotas")
+        .update({ lessons_processed_this_month: quota.lessons_processed_this_month + 1 })
+        .eq("user_id", targetUserId);
+    }
+
+    // 8. Ephemeral Audio Purge: Delete file from bucket
+    await supabase.storage.from("lesson-recordings").remove([filePath]);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        summary: summaryRow,
+        analysis,
+      }),
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      }
+    );
+  } catch (err: any) {
+    console.error("[EDGE FUNCTION ERROR]", err);
+    return new Response(JSON.stringify({ error: err.message || String(err) }), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }
+});
