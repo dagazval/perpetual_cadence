@@ -46,8 +46,9 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
   const [isWinsOpen, setIsWinsOpen] = useState<boolean>(true);
   const [isMechanicsOpen, setIsMechanicsOpen] = useState<boolean>(true);
 
-  // Refresh trigger
+  // Refresh trigger and locally injected active summary
   const [refreshSeed, setRefreshSeed] = useState<number>(0);
+  const [activeLessonSummary, setActiveLessonSummary] = useState<FactLessonSummary | null>(null);
 
   // Safe data queries
   const quota =
@@ -69,7 +70,8 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
       ? (db as any).getLessonSummaries(activeInstrument.instrument_id)
       : [];
 
-  const latestLesson: FactLessonSummary | undefined = lessonSummaries[0];
+  // Determine latest lesson (prefer fresh state from upload, then fallback to DB query)
+  const latestLesson: FactLessonSummary | undefined = activeLessonSummary || lessonSummaries[0];
 
   // Parse latest lesson content safely
   let areasOfGrowth: string[] = [];
@@ -94,7 +96,7 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
     }
   }
 
-const handleIngestAudio = async () => {
+  const handleIngestAudio = async () => {
     setErrorMessage(null);
     try {
       console.log('[DEBUG] 1. Starting file picker...');
@@ -106,35 +108,52 @@ const handleIngestAudio = async () => {
         return;
       }
 
-      // Guard against undefined activeInstrument
-      const instId = activeInstrument?.instrument_id || (activeInstrument as any)?.instrumentId || 'inst-voice-001';
+      const instId =
+        activeInstrument?.instrument_id || (activeInstrument as any)?.instrumentId || '00000000-0000-0000-0000-000000000010';
       const instName = activeInstrument?.name || 'Voice';
 
       console.log(`[DEBUG] 3. Starting pipeline for ${instName} (${instId})...`);
       setIsProcessing(true);
 
-      await processLessonRecording(
-        file,
-        instId,
-        instName,
-        (stage) => {
-          console.log('[DEBUG Stage]:', stage);
-          setPipelineStage(stage);
-        }
-      );
+      const result = await processLessonRecording(file, instId, instName, (stage) => {
+        console.log('[DEBUG Stage]:', stage);
+        setPipelineStage(stage);
+      });
 
-      console.log('[DEBUG] 4. Pipeline finished successfully.');
+      console.log('[DEBUG] 4. Pipeline finished successfully:', result);
+      setActiveLessonSummary(result);
       setRefreshSeed((prev) => prev + 1);
+
       if (typeof onTagsUpdated === 'function') {
         onTagsUpdated();
       }
-    } catch (err: any) {
+} catch (err: any) {
       console.error('[INGEST ERROR RAW]:', err);
-      // Alerts the full error message and name
-      Alert.alert(
-        'Ingestion Caught Error',
-        `${err?.name || 'Error'}: ${err?.message || String(err)}\n\nStack:\n${err?.stack?.slice(0, 150) || 'No stack'}`
-      );
+      
+      const rawMessage = (err?.message || String(err)).toLowerCase();
+      let alertTitle = 'Lesson Ingestion Notice';
+      let alertBody = 'An unexpected issue occurred while analyzing the audio. Please try again.';
+
+      if (
+        rawMessage.includes('high demand') ||
+        rawMessage.includes('503') ||
+        rawMessage.includes('overloaded') ||
+        rawMessage.includes('spikes in demand')
+      ) {
+        alertTitle = 'Model at Capacity';
+        alertBody = 'Gemini is currently experiencing high demand. Please wait a minute and try again.';
+      } else if (rawMessage.includes('quota') || rawMessage.includes('402')) {
+        alertTitle = 'Monthly Quota Exceeded';
+        alertBody = 'You have reached your monthly lesson analysis limit.';
+      } else if (rawMessage.includes('network') || rawMessage.includes('failed to fetch')) {
+        alertTitle = 'Network Connection Issue';
+        alertBody = 'Could not reach the server. Please check your internet connection.';
+      } else {
+        // Fallback with clean error snippet
+        alertBody = err?.message?.replace(/\[.*?\]/g, '').trim() || alertBody;
+      }
+
+      Alert.alert(alertTitle, alertBody, [{ text: 'OK' }]);
     } finally {
       setIsProcessing(false);
     }

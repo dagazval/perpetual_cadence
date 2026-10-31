@@ -48,26 +48,24 @@ export const pickLessonAudioFile = async (): Promise<PickedAudioFile | null> => 
 
 /**
  * Upload Audio to Supabase Storage Bucket ('lesson-recordings')
- * Uses React Native FormData rather than unsupported response.blob()
+ * Reads raw ArrayBuffer directly to avoid Android OkHttp FormDataPart crashes.
  */
 async function uploadAudioToSupabase(file: PickedAudioFile): Promise<string> {
   const timestamp = Date.now();
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath = `uploads/${timestamp}_${safeName}`;
 
-  console.log(`[STORAGE] Preparing FormData for upload: ${filePath}`);
+  console.log(`[STORAGE] Reading file as ArrayBuffer from: ${file.uri}`);
 
-  const formData = new FormData();
-  formData.append('', {
-    uri: file.uri,
-    name: safeName,
-    type: file.mimeType || 'audio/m4a',
-  } as any);
+  // fetch(file.uri) to arrayBuffer is natively supported in Expo / React Native
+  const response = await fetch(file.uri);
+  const arrayBuffer = await response.arrayBuffer();
 
-  console.log(`[STORAGE] Uploading to 'lesson-recordings'...`);
+  console.log(`[STORAGE] Uploading ArrayBuffer (${arrayBuffer.byteLength} bytes) to 'lesson-recordings'...`);
+
   const { data, error } = await supabase.storage
     .from('lesson-recordings')
-    .upload(filePath, formData, {
+    .upload(filePath, arrayBuffer, {
       contentType: file.mimeType || 'audio/m4a',
       upsert: true,
     });
@@ -89,7 +87,7 @@ export async function processLessonRecording(
   instrumentId: string,
   instrumentName: string,
   onProgress?: (stage: string) => void
-): Promise<FactLessonSummary | null> {
+): Promise<FactLessonSummary> {
   const quota =
     typeof (db as any).getQuota === 'function'
       ? (db as any).getQuota()
@@ -101,13 +99,17 @@ export async function processLessonRecording(
     );
   }
 
+  // 1. Upload
   if (onProgress) onProgress('Uploading audio to Supabase Storage...');
+  console.log('[PIPELINE STEP 1] Uploading audio...');
   const uploadedPath = await uploadAudioToSupabase(file);
+  console.log('[PIPELINE STEP 1 COMPLETE] File path:', uploadedPath);
 
+  // 2. Invoke Edge Function
   if (onProgress) onProgress('Transcribing & analyzing with Gemini in cloud...');
-  console.log(`[PIPELINE] Invoking Edge Function for path: ${uploadedPath} (${instrumentName})`);
+  console.log(`[PIPELINE STEP 2] Calling supabase.functions.invoke('process-lesson-audio')...`);
 
-  const { data, error } = await supabase.functions.invoke('process-lesson-audio', {
+  const invokeResponse = await supabase.functions.invoke('process-lesson-audio', {
     body: {
       filePath: uploadedPath,
       instrumentName,
@@ -116,20 +118,40 @@ export async function processLessonRecording(
     },
   });
 
-  if (error) {
-    console.error('[EDGE FUNCTION ERROR]', error);
-    throw new Error(`Cloud analysis failed: ${error.message}`);
+  console.log('[PIPELINE STEP 2 COMPLETE] Raw invoke response:', JSON.stringify(invokeResponse));
+
+if (invokeResponse.error) {
+    console.error('[EDGE FUNCTION ERROR]', invokeResponse.error);
+    let serverDetail = invokeResponse.error.message;
+
+    // Supabase stores the actual HTTP response body inside error.context
+    if ((invokeResponse.error as any).context) {
+      try {
+        const body = await (invokeResponse.error as any).context.json();
+        serverDetail = body.error || JSON.stringify(body);
+      } catch {
+        try {
+          serverDetail = await (invokeResponse.error as any).context.text();
+        } catch {
+          // fallback to default message
+        }
+      }
+    }
+
+    throw new Error(serverDetail);
   }
 
+  const data = invokeResponse.data;
   if (!data || !data.analysis) {
-    throw new Error('Edge Function returned invalid or empty analysis payload.');
+    throw new Error(`Edge Function returned no analysis data. Received: ${JSON.stringify(data)}`);
   }
 
+  // 3. Save locally
   if (onProgress) onProgress('Saving critique and staging tags in local database...');
+  console.log('[PIPELINE STEP 3] Writing to local SQLite schema...');
 
   const analysis = data.analysis;
 
-  // Persist into local SQLite database
   const summary = db.recordLessonSummary({
     instrument_id: instrumentId,
     lesson_date: new Date().toISOString().slice(0, 10),
@@ -137,8 +159,9 @@ export async function processLessonRecording(
     wins_and_strengths: analysis.context_and_feedback?.wins_and_strengths || [],
     technique_mechanics_cues: analysis.technique_and_mechanics_cues || [],
     suggested_focus_tags: analysis.suggested_focus_tags || [],
-    transcript_text: `Ingested ${file.name}. Teacher and student evaluated for ${instrumentName}.`,
+    transcript_text: `Ingested ${file.name}. Evaluated for ${instrumentName}.`,
   });
 
+  console.log('[PIPELINE STEP 3 COMPLETE] Local summary saved:', summary.lesson_id);
   return summary;
 }

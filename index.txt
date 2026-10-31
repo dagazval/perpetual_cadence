@@ -24,16 +24,15 @@ You MUST return STRICT JSON adhering precisely to this structure:
 }
 `;
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
 Deno.serve(async (req) => {
-  // CORS Preflight
   if (req.method === "OPTIONS") {
-    return new Response("ok", {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-      },
-    });
+    return new Response("ok", { headers: CORS_HEADERS });
   }
 
   try {
@@ -42,13 +41,17 @@ Deno.serve(async (req) => {
     if (!filePath || !instrumentId) {
       return new Response(JSON.stringify({ error: "Missing filePath or instrumentId" }), {
         status: 400,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY")!;
+
+    if (!geminiApiKey) {
+      throw new Error("GEMINI_API_KEY secret is not configured in Supabase Edge Functions.");
+    }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const targetUserId = userId || "00000000-0000-0000-0000-000000000001";
@@ -63,7 +66,7 @@ Deno.serve(async (req) => {
     if (quota && quota.lessons_processed_this_month >= quota.max_lessons_per_month) {
       return new Response(
         JSON.stringify({ error: "Monthly lesson quota exceeded (402)" }),
-        { status: 402, headers: { "Content-Type": "application/json" } }
+        { status: 402, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
       );
     }
 
@@ -76,7 +79,7 @@ Deno.serve(async (req) => {
       throw new Error(`Failed to download audio: ${downloadError?.message}`);
     }
 
-// Convert audio file bytes to Base64 efficiently via Buffer
+    // Convert audio file bytes to Base64 using Buffer
     const arrayBuffer = await fileData.arrayBuffer();
     const base64Audio = Buffer.from(arrayBuffer).toString("base64");
 
@@ -201,8 +204,8 @@ Deno.serve(async (req) => {
       }),
       {
         headers: {
+          ...CORS_HEADERS,
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
         },
       }
     );
@@ -211,8 +214,8 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: err.message || String(err) }), {
       status: 500,
       headers: {
+        ...CORS_HEADERS,
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
       },
     });
   }

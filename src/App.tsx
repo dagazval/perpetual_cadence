@@ -1,5 +1,5 @@
 /**
- * Cantabile - Pure React Native Root Application
+ * Perpetual Cadence - Pure React Native Root Application
  * Managed Expo SDK 52 / React Native Mobile Experience
  * 
  * Strict React Native Primitives & lucide-react-native icons
@@ -13,7 +13,7 @@ import {
   BookOpen,
   Music,
   ShieldCheck,
-  Timer
+  Timer,
 } from 'lucide-react-native';
 import { useState } from 'react';
 import {
@@ -34,25 +34,40 @@ import { db, DimInstrument } from './database/schema';
 type ActiveTab = 'practice' | 'progress' | 'lessons';
 
 export default function App() {
-  
   const [activeTab, setActiveTab] = useState<ActiveTab>('practice');
-  const [instruments, setInstruments] = useState<DimInstrument[]>(() =>
-    db.getInstruments()
-  );
-  // Default to first instrument (Voice)
+  const [instruments, setInstruments] = useState<DimInstrument[]>(() => {
+    try {
+      const list = db.getInstruments();
+      return list && list.length > 0 ? list : [];
+    } catch (e) {
+      console.error('[DB INIT ERROR]:', e);
+      return [];
+    }
+  });
+
   const [activeInstrumentId, setActiveInstrumentId] = useState<string>(
-    instruments[0]?.instrument_id || 'inst-voice-001'
+    instruments[0]?.instrument_id || '00000000-0000-0000-0000-000000000010'
   );
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
-  const activeInstrument =
-    instruments.find((i) => i.instrument_id === activeInstrumentId) ||
-    instruments[0];
+  // Fallback dummy object so child components never crash on undefined properties
+  const activeInstrument = instruments.find((i) => i.instrument_id === activeInstrumentId) || instruments[0] || {
+    instrument_id: '00000000-0000-0000-0000-000000000010',
+    user_id: '00000000-0000-0000-0000-000000000001',
+    name: 'Voice',
+    target_days_rolling_week: 4,
+    current_xp: 0,
+    current_level: 1,
+    created_at: new Date().toISOString(),
+  };
 
-  
   const handleDataChanged = () => {
-    setInstruments(db.getInstruments());
-    setRefreshTrigger((prev) => prev + 1);
+    try {
+      setInstruments(db.getInstruments());
+      setRefreshTrigger((prev) => prev + 1);
+    } catch (e) {
+      console.error('[DATA REFRESH ERROR]:', e);
+    }
   };
 
   return (

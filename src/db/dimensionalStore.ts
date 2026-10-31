@@ -68,9 +68,9 @@ const CURRENT_USER_ID = 'user-cadence-001';
 
 // Seed initial Kimball dimensions
 function createInitialStore() {
-  const voiceId = 'inst-voice-01';
-  const pianoId = 'inst-piano-02';
-  const oboeId = 'inst-oboe-03';
+  const voiceId = '00000000-0000-0000-0000-000000000010';
+  const pianoId = '00000000-0000-0000-0000-000000000020';
+  const oboeId = '00000000-0000-0000-0000-000000000030';
 
   const instruments: DimInstrument[] = [
     {
