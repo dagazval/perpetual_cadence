@@ -1,10 +1,6 @@
 /**
  * Cantabile - AiLessonAnalyzer Component
  * Audio Ingestion, Pedagogical Vocal Analysis & Tag Staging Review
- * 
- * Strict React Native Primitives & lucide-react-native icons
- * Three collapsible accordions (Areas of Growth, Wins & Strengths, Technique & Mechanics Cues)
- * Staging Review Area with [ ✓ Approve ] and [ ✕ Discard ]
  */
 
 import {
@@ -53,10 +49,26 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
   // Refresh trigger
   const [refreshSeed, setRefreshSeed] = useState<number>(0);
 
-  // Data queries
-  const quota = db.getQuota();
-  const stagedTags = db.getStagedTags(activeInstrument.instrument_id);
-  const lessonSummaries = db.getLessonSummaries(activeInstrument.instrument_id);
+  // Safe data queries
+  const quota =
+    typeof (db as any).getQuota === 'function'
+      ? (db as any).getQuota()
+      : {
+          plan_tier: 'beta_free',
+          lessons_processed_this_month: 0,
+          max_lessons_per_month: 10,
+        };
+
+  const stagedTags: DimTag[] =
+    typeof (db as any).getStagedTags === 'function'
+      ? (db as any).getStagedTags(activeInstrument.instrument_id)
+      : [];
+
+  const lessonSummaries: FactLessonSummary[] =
+    typeof (db as any).getLessonSummaries === 'function'
+      ? (db as any).getLessonSummaries(activeInstrument.instrument_id)
+      : [];
+
   const latestLesson: FactLessonSummary | undefined = lessonSummaries[0];
 
   // Parse latest lesson content safely
@@ -82,43 +94,66 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
     }
   }
 
-  const handleIngestAudio = async () => {
+const handleIngestAudio = async () => {
     setErrorMessage(null);
     try {
-      console.log('[DEBUG] Starting file picker...');
+      console.log('[DEBUG] 1. Starting file picker...');
       const file = await pickLessonAudioFile();
-      console.log('[DEBUG] Picker returned:', file);
+      console.log('[DEBUG] 2. Picker returned:', file);
 
       if (!file) {
         Alert.alert('Picker Cancelled', 'No file was selected or returned.');
         return;
       }
 
+      // Guard against undefined activeInstrument
+      const instId = activeInstrument?.instrument_id || (activeInstrument as any)?.instrumentId || 'inst-voice-001';
+      const instName = activeInstrument?.name || 'Voice';
+
+      console.log(`[DEBUG] 3. Starting pipeline for ${instName} (${instId})...`);
       setIsProcessing(true);
+
       await processLessonRecording(
         file,
-        activeInstrument.instrument_id,
-        activeInstrument.name,
-        (stage) => setPipelineStage(stage)
+        instId,
+        instName,
+        (stage) => {
+          console.log('[DEBUG Stage]:', stage);
+          setPipelineStage(stage);
+        }
       );
+
+      console.log('[DEBUG] 4. Pipeline finished successfully.');
+      setRefreshSeed((prev) => prev + 1);
+      if (typeof onTagsUpdated === 'function') {
+        onTagsUpdated();
+      }
     } catch (err: any) {
-      console.error('[INGEST ERROR]:', err);
-      Alert.alert('Ingestion Error', err?.message || String(err));
+      console.error('[INGEST ERROR RAW]:', err);
+      // Alerts the full error message and name
+      Alert.alert(
+        'Ingestion Caught Error',
+        `${err?.name || 'Error'}: ${err?.message || String(err)}\n\nStack:\n${err?.stack?.slice(0, 150) || 'No stack'}`
+      );
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleApproveTag = (tagId: string) => {
-    db.approveStagedTag(tagId);
-    setRefreshSeed((prev) => prev + 1);
-    onTagsUpdated();
+    if (typeof (db as any).approveStagedTag === 'function') {
+      (db as any).approveStagedTag(tagId);
+      setRefreshSeed((prev) => prev + 1);
+      if (typeof onTagsUpdated === 'function') onTagsUpdated();
+    }
   };
 
   const handleDiscardTag = (tagId: string) => {
-    db.discardStagedTag(tagId);
-    setRefreshSeed((prev) => prev + 1);
-    onTagsUpdated();
+    if (typeof (db as any).discardStagedTag === 'function') {
+      (db as any).discardStagedTag(tagId);
+      setRefreshSeed((prev) => prev + 1);
+      if (typeof onTagsUpdated === 'function') onTagsUpdated();
+    }
   };
 
   return (
@@ -132,12 +167,12 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
         <View style={styles.quotaTextGroup}>
           <Text style={styles.quotaTitle}>Quota & Cost Protection</Text>
           <Text style={styles.quotaSub}>
-            Plan: {quota.plan_tier.replace('_', ' ').toUpperCase()} • Edge Whisper & LLM
+            Plan: {quota?.plan_tier ? String(quota.plan_tier).replace('_', ' ').toUpperCase() : 'BETA FREE'} • Cloud Storage Upload
           </Text>
         </View>
         <View style={styles.quotaPill}>
           <Text style={styles.quotaCountText}>
-            {quota.lessons_processed_this_month} / {quota.max_lessons_per_month}
+            {quota.lessons_processed_this_month ?? 0} / {quota.max_lessons_per_month ?? 10}
           </Text>
           <Text style={styles.quotaUnitText}>Used</Text>
         </View>
@@ -148,7 +183,7 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
         style={[
           styles.ingestButton,
           isProcessing && styles.ingestButtonDisabled,
-          quota.lessons_processed_this_month >= quota.max_lessons_per_month &&
+          (quota.lessons_processed_this_month ?? 0) >= (quota.max_lessons_per_month ?? 10) &&
             styles.ingestButtonQuotaHit,
         ]}
         activeOpacity={0.8}
@@ -366,14 +401,8 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  contentContainer: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 32,
-  },
+  container: { flex: 1 },
+  contentContainer: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32 },
   quotaBanner: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -386,19 +415,9 @@ const styles = StyleSheet.create({
     borderColor: '#334155',
     marginBottom: 14,
   },
-  quotaTextGroup: {
-    flex: 1,
-  },
-  quotaTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#f8fafc',
-  },
-  quotaSub: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 2,
-  },
+  quotaTextGroup: { flex: 1 },
+  quotaTitle: { fontSize: 13, fontWeight: '700', color: '#f8fafc' },
+  quotaSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
   quotaPill: {
     backgroundColor: '#0f172a',
     paddingHorizontal: 10,
@@ -408,16 +427,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#334155',
   },
-  quotaCountText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#60a5fa',
-  },
-  quotaUnitText: {
-    fontSize: 9,
-    color: '#94a3b8',
-    textTransform: 'uppercase',
-  },
+  quotaCountText: { fontSize: 13, fontWeight: '800', color: '#60a5fa' },
+  quotaUnitText: { fontSize: 9, color: '#94a3b8', textTransform: 'uppercase' },
   ingestButton: {
     backgroundColor: '#2563eb',
     borderRadius: 16,
@@ -432,18 +443,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
   },
-  ingestButtonDisabled: {
-    opacity: 0.7,
-  },
-  ingestButtonQuotaHit: {
-    backgroundColor: '#475569',
-  },
-  ingestButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
+  ingestButtonDisabled: { opacity: 0.7 },
+  ingestButtonQuotaHit: { backgroundColor: '#475569' },
+  ingestButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
   processingCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -455,19 +457,9 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 16,
   },
-  processingTextGroup: {
-    flex: 1,
-  },
-  processingTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#60a5fa',
-  },
-  processingStage: {
-    fontSize: 12,
-    color: '#cbd5e1',
-    marginTop: 2,
-  },
+  processingTextGroup: { flex: 1 },
+  processingTitle: { fontSize: 13, fontWeight: '700', color: '#60a5fa' },
+  processingStage: { fontSize: 12, color: '#cbd5e1', marginTop: 2 },
   errorCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -479,33 +471,12 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 16,
   },
-  errorText: {
-    color: '#f87171',
-    fontSize: 12,
-    flex: 1,
-  },
-  feedbackSection: {
-    marginBottom: 24,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#f8fafc',
-  },
-  sectionSubtext: {
-    fontSize: 12,
-    color: '#64748b',
-    marginBottom: 12,
-  },
-  accordionsWrapper: {
-    gap: 10,
-  },
+  errorText: { color: '#f87171', fontSize: 12, flex: 1 },
+  feedbackSection: { marginBottom: 24 },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: '#f8fafc' },
+  sectionSubtext: { fontSize: 12, color: '#64748b', marginBottom: 12 },
+  accordionsWrapper: { gap: 10 },
   accordionCard: {
     backgroundColor: '#1e293b',
     borderRadius: 14,
@@ -519,12 +490,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 14,
   },
-  accordionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-  },
+  accordionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   accordionIconPill: {
     width: 26,
     height: 26,
@@ -532,21 +498,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  growthPill: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-  },
-  winsPill: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-  },
-  cuesPill: {
-    backgroundColor: 'rgba(139, 92, 246, 0.15)',
-  },
-  accordionTitleText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#f1f5f9',
-    flex: 1,
-  },
+  growthPill: { backgroundColor: 'rgba(245, 158, 11, 0.15)' },
+  winsPill: { backgroundColor: 'rgba(16, 185, 129, 0.15)' },
+  cuesPill: { backgroundColor: 'rgba(139, 92, 246, 0.15)' },
+  accordionTitleText: { fontSize: 14, fontWeight: '600', color: '#f1f5f9', flex: 1 },
   accordionBody: {
     paddingHorizontal: 14,
     paddingBottom: 14,
@@ -555,32 +510,12 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     gap: 8,
   },
-  bulletItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  bulletDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginTop: 6,
-  },
-  bulletDotGrowth: {
-    backgroundColor: '#f59e0b',
-  },
-  bulletDotWins: {
-    backgroundColor: '#10b981',
-  },
-  bulletDotCues: {
-    backgroundColor: '#a855f7',
-  },
-  bulletText: {
-    fontSize: 13,
-    color: '#cbd5e1',
-    lineHeight: 18,
-    flex: 1,
-  },
+  bulletItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  bulletDot: { width: 6, height: 6, borderRadius: 3, marginTop: 6 },
+  bulletDotGrowth: { backgroundColor: '#f59e0b' },
+  bulletDotWins: { backgroundColor: '#10b981' },
+  bulletDotCues: { backgroundColor: '#a855f7' },
+  bulletText: { fontSize: 13, color: '#cbd5e1', lineHeight: 18, flex: 1 },
   emptyLessonCard: {
     backgroundColor: '#1e293b',
     borderRadius: 14,
@@ -589,15 +524,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#334155',
   },
-  emptyLessonText: {
-    fontSize: 13,
-    color: '#94a3b8',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  stagingSection: {
-    marginBottom: 20,
-  },
+  emptyLessonText: { fontSize: 13, color: '#94a3b8', textAlign: 'center', lineHeight: 18 },
+  stagingSection: { marginBottom: 20 },
   emptyStagedCard: {
     backgroundColor: '#1e293b',
     borderRadius: 14,
@@ -606,71 +534,42 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#334155',
   },
-  emptyStagedText: {
-    fontSize: 12,
-    color: '#64748b',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  stagedTagsGrid: {
-    gap: 10,
-  },
+  emptyStagedText: { fontSize: 12, color: '#64748b', textAlign: 'center' },
+  stagedTagsGrid: { gap: 8 },
   stagedTagCard: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'center',
     backgroundColor: '#1e293b',
-    borderRadius: 14,
+    borderRadius: 12,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#475569',
+    borderColor: '#334155',
   },
-  stagedTagInfo: {
-    flex: 1,
-  },
-  stagedTagName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#f8fafc',
-  },
-  stagedTagMeta: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  actionButtonGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
+  stagedTagInfo: { flex: 1 },
+  stagedTagName: { fontSize: 14, fontWeight: '600', color: '#f8fafc' },
+  stagedTagMeta: { fontSize: 11, color: '#64748b', marginTop: 2 },
+  actionButtonGroup: { flexDirection: 'row', gap: 8 },
   approveButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#16a34a',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 10,
+    backgroundColor: '#10b981',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     gap: 4,
   },
-  actionButtonText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
+  actionButtonText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
   discardButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0f172a',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
     borderWidth: 1,
-    borderColor: '#ef4444',
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     gap: 4,
   },
-  discardButtonText: {
-    color: '#ef4444',
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  discardButtonText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
 });

@@ -118,23 +118,23 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'progress' && (
-            <ScrollView
-              style={styles.scrollScreen}
-              contentContainerStyle={styles.scrollScreenContent}
-              showsVerticalScrollIndicator={false}
-            >
-              <RollingConsistencyCard
-                key={`${activeInstrument.instrument_id}-${refreshTrigger}`}
-                instrument={activeInstrument}
-              />
-              <PracticeLog
-                key={`${activeInstrument.instrument_id}-${refreshTrigger}`}
-                instrumentId={activeInstrument.instrument_id}
-                refreshKey={refreshTrigger}
-              />
-            </ScrollView>
-          )}
+            {activeTab === 'progress' && (
+              <ScrollView
+                style={styles.scrollScreen}
+                contentContainerStyle={styles.scrollScreenContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <RollingConsistencyCard
+                  key={`consistency-${activeInstrument.instrument_id}-${refreshTrigger}`}
+                  instrument={activeInstrument}
+                />
+                <PracticeLog
+                  key={`log-${activeInstrument.instrument_id}-${refreshTrigger}`}
+                  instrumentId={activeInstrument.instrument_id}
+                  refreshKey={refreshTrigger}
+                />
+              </ScrollView>
+            )}
 
           {activeTab === 'lessons' && (
             <AiLessonAnalyzer
