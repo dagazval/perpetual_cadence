@@ -1,18 +1,7 @@
-/**
- * Perpetual Cadence - Pure React Native Root Application
- * Managed Expo SDK 52 / React Native Mobile Experience
- * 
- * Strict React Native Primitives & lucide-react-native icons
- * Bottom Tab Navigation Shell (Practice, Progress, Lessons)
- * Horizontal Instrument Switcher Pills (Voice, Piano, Oboe)
- * Offline-first SQLite dimensional star schema backing
- */
-
 import {
   BarChart2,
   BookOpen,
   Music,
-  ShieldCheck,
   Timer,
 } from 'lucide-react-native';
 import { useState } from 'react';
@@ -29,366 +18,287 @@ import { AiLessonAnalyzer } from './components/AiLessonAnalyzer';
 import { PracticeLog } from './components/PracticeLog';
 import { PracticeStopwatch } from './components/PracticeStopwatch';
 import { RollingConsistencyCard } from './components/RollingConsistencyCard';
-import { db, DimInstrument } from './database/schema';
+import { db, DEFAULT_INSTRUMENT_IDS, DimInstrument } from './database/schema';
 
 type ActiveTab = 'practice' | 'progress' | 'lessons';
+
+const FALLBACK_INSTRUMENT: DimInstrument = {
+  instrument_id: DEFAULT_INSTRUMENT_IDS.VOICE,
+  user_id: '00000000-0000-0000-0000-000000000001',
+  name: 'Voice',
+  target_days_rolling_week: 4,
+  current_xp: 320,
+  current_level: 1,
+  created_at: new Date().toISOString(),
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('practice');
   const [instruments, setInstruments] = useState<DimInstrument[]>(() => {
     try {
       const list = db.getInstruments();
-      return list && list.length > 0 ? list : [];
-    } catch (e) {
-      console.error('[DB INIT ERROR]:', e);
-      return [];
+      return list && list.length > 0 ? list : [FALLBACK_INSTRUMENT];
+    } catch (err) {
+      console.error('[DB INIT ERROR]:', err);
+      return [FALLBACK_INSTRUMENT];
     }
   });
 
   const [activeInstrumentId, setActiveInstrumentId] = useState<string>(
-    instruments[0]?.instrument_id || '00000000-0000-0000-0000-000000000010'
+    instruments[0]?.instrument_id || DEFAULT_INSTRUMENT_IDS.VOICE
   );
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
-  // Fallback dummy object so child components never crash on undefined properties
-  const activeInstrument = instruments.find((i) => i.instrument_id === activeInstrumentId) || instruments[0] || {
-    instrument_id: '00000000-0000-0000-0000-000000000010',
-    user_id: '00000000-0000-0000-0000-000000000001',
-    name: 'Voice',
-    target_days_rolling_week: 4,
-    current_xp: 0,
-    current_level: 1,
-    created_at: new Date().toISOString(),
-  };
+  const activeInstrument =
+    instruments.find((i) => i.instrument_id === activeInstrumentId) ||
+    instruments[0] ||
+    FALLBACK_INSTRUMENT;
 
   const handleDataChanged = () => {
     try {
       setInstruments(db.getInstruments());
       setRefreshTrigger((prev) => prev + 1);
-    } catch (e) {
-      console.error('[DATA REFRESH ERROR]:', e);
+    } catch (err) {
+      console.error('[REFRESH ERROR]:', err);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <View style={styles.appContainer}>
-        {/* Top Header & Offline Readiness Bar */}
-        <View style={styles.topHeader}>
-          <View style={styles.brandingRow}>
-            <View style={styles.logoGroup}>
-              <View style={styles.appIconCircle}>
-                <Music size={18} color="#ffffff" />
-              </View>
-              <View>
-                <Text style={styles.appName}>Cantabile</Text>
-                <Text style={styles.appTagline}>Vocal & Instrumental Practice</Text>
-              </View>
-            </View>
 
-            {/* Offline-First SQLite Indicator */}
-            <View style={styles.offlineStatusPill}>
-              <ShieldCheck size={13} color="#10b981" />
-              <Text style={styles.offlineStatusText}>Local SQLite</Text>
-            </View>
+      {/* Header & Instrument Selector */}
+      <View style={styles.header}>
+        <View style={styles.brandingRow}>
+          <View style={styles.appIconCircle}>
+            <Music size={16} color="#ffffff" />
           </View>
-
-          {/* Horizontal Instrument Switcher Pills */}
-          <View style={styles.instrumentSelectorContainer}>
-            {instruments.map((inst, index) => {
-               const isActive = inst.instrument_id === activeInstrument.instrument_id;
-            return (
-                  <TouchableOpacity
-                  key={`${inst.instrument_id}-${index}`}
-                  style={[
-                    styles.instrumentPill,
-                    isActive && styles.instrumentPillActive,
-                  ]}
-                  activeOpacity={0.7}
-                  onPress={() => setActiveInstrumentId(inst.instrument_id)}
-                >
-                  <Text
-                    style={[
-                      styles.instrumentPillText,
-                      isActive && styles.instrumentPillTextActive,
-                    ]}
-                  >
-                    {inst.name}
-                  </Text>
-                  {isActive && <View style={styles.activeDot} />}
-                </TouchableOpacity>
-              );
-            })}
+          <View>
+            <Text style={styles.headerTitle}>Cantabile</Text>
+            <Text style={styles.headerSubtitle}>Perpetual Cadence Practice</Text>
           </View>
         </View>
 
-        {/* Tab Content Body */}
-        <View style={styles.bodyContent}>
-          {activeTab === 'practice' && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.instrumentBar}
+          contentContainerStyle={styles.instrumentBarContent}
+        >
+          {instruments.map((inst, index) => {
+            const isSelected = inst.instrument_id === activeInstrument.instrument_id;
+            return (
+              <TouchableOpacity
+                key={`${inst.instrument_id}-${index}`}
+                onPress={() => setActiveInstrumentId(inst.instrument_id)}
+                style={[
+                  styles.instrumentPill,
+                  isSelected && styles.instrumentPillActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.instrumentPillText,
+                    isSelected && styles.instrumentPillTextActive,
+                  ]}
+                >
+                  {inst.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      {/* Main Tab Screen Area */}
+      <View style={styles.content}>
+        {activeTab === 'practice' && (
+          <ScrollView contentContainerStyle={styles.scrollContent}>
             <PracticeStopwatch
-              key={`${activeInstrument.instrument_id}-${refreshTrigger}`}
+              key={`stopwatch-${activeInstrument.instrument_id}-${refreshTrigger}`}
               activeInstrument={activeInstrument}
               onSessionSaved={handleDataChanged}
             />
-          )}
+          </ScrollView>
+        )}
 
-            {activeTab === 'progress' && (
-              <ScrollView
-                style={styles.scrollScreen}
-                contentContainerStyle={styles.scrollScreenContent}
-                showsVerticalScrollIndicator={false}
-              >
-                <RollingConsistencyCard
-                  key={`consistency-${activeInstrument.instrument_id}-${refreshTrigger}`}
-                  instrument={activeInstrument}
-                />
-                <PracticeLog
-                  key={`log-${activeInstrument.instrument_id}-${refreshTrigger}`}
-                  instrumentId={activeInstrument.instrument_id}
-                  refreshKey={refreshTrigger}
-                />
-              </ScrollView>
-            )}
+        {activeTab === 'progress' && (
+          <ScrollView contentContainerStyle={styles.scrollContent}>
+            <RollingConsistencyCard
+              key={`consistency-${activeInstrument.instrument_id}-${refreshTrigger}`}
+              instrument={activeInstrument}
+            />
+            <View style={{ marginTop: 24 }}>
+              <PracticeLog
+                key={`log-${activeInstrument.instrument_id}-${refreshTrigger}`}
+                instrumentId={activeInstrument.instrument_id}
+                refreshKey={refreshTrigger}
+              />
+            </View>
+          </ScrollView>
+        )}
 
-          {activeTab === 'lessons' && (
+        {activeTab === 'lessons' && (
+          <ScrollView contentContainerStyle={styles.scrollContent}>
             <AiLessonAnalyzer
-              key={`${activeInstrument.instrument_id}-${refreshTrigger}`}
+              key={`lessons-${activeInstrument.instrument_id}-${refreshTrigger}`}
               activeInstrument={activeInstrument}
               onTagsUpdated={handleDataChanged}
             />
-          )}
-        </View>
+          </ScrollView>
+        )}
+      </View>
 
-        {/* Bottom Tab Navigation Shell (3 Tabs) */}
-        <View style={styles.bottomTabBar}>
-          {/* TAB 1: PRACTICE */}
-          <TouchableOpacity
-            style={styles.tabButton}
-            activeOpacity={0.7}
-            onPress={() => setActiveTab('practice')}
+      {/* Bottom Navigation Bar */}
+      <View style={styles.navBar}>
+        <TouchableOpacity
+          style={styles.navButton}
+          onPress={() => setActiveTab('practice')}
+        >
+          <Timer
+            size={22}
+            color={activeTab === 'practice' ? '#a78bfa' : '#6b7280'}
+          />
+          <Text
+            style={[
+              styles.navLabel,
+              activeTab === 'practice' && styles.navLabelActive,
+            ]}
           >
-            <View
-              style={[
-                styles.tabIconContainer,
-                activeTab === 'practice' && styles.tabIconContainerActive,
-              ]}
-            >
-              <Timer
-                size={20}
-                color={activeTab === 'practice' ? '#60a5fa' : '#64748b'}
-              />
-            </View>
-            <Text
-              style={[
-                styles.tabLabel,
-                activeTab === 'practice' && styles.tabLabelActive,
-              ]}
-            >
-              Practice
-            </Text>
-          </TouchableOpacity>
+            Practice
+          </Text>
+        </TouchableOpacity>
 
-          {/* TAB 2: PROGRESS */}
-          <TouchableOpacity
-            style={styles.tabButton}
-            activeOpacity={0.7}
-            onPress={() => setActiveTab('progress')}
+        <TouchableOpacity
+          style={styles.navButton}
+          onPress={() => setActiveTab('progress')}
+        >
+          <BarChart2
+            size={22}
+            color={activeTab === 'progress' ? '#a78bfa' : '#6b7280'}
+          />
+          <Text
+            style={[
+              styles.navLabel,
+              activeTab === 'progress' && styles.navLabelActive,
+            ]}
           >
-            <View
-              style={[
-                styles.tabIconContainer,
-                activeTab === 'progress' && styles.tabIconContainerActive,
-              ]}
-            >
-              <BarChart2
-                size={20}
-                color={activeTab === 'progress' ? '#60a5fa' : '#64748b'}
-              />
-            </View>
-            <Text
-              style={[
-                styles.tabLabel,
-                activeTab === 'progress' && styles.tabLabelActive,
-              ]}
-            >
-              Progress
-            </Text>
-          </TouchableOpacity>
+            Progress
+          </Text>
+        </TouchableOpacity>
 
-          {/* TAB 3: LESSONS */}
-          <TouchableOpacity
-            style={styles.tabButton}
-            activeOpacity={0.7}
-            onPress={() => setActiveTab('lessons')}
+        <TouchableOpacity
+          style={styles.navButton}
+          onPress={() => setActiveTab('lessons')}
+        >
+          <BookOpen
+            size={22}
+            color={activeTab === 'lessons' ? '#a78bfa' : '#6b7280'}
+          />
+          <Text
+            style={[
+              styles.navLabel,
+              activeTab === 'lessons' && styles.navLabelActive,
+            ]}
           >
-            <View
-              style={[
-                styles.tabIconContainer,
-                activeTab === 'lessons' && styles.tabIconContainerActive,
-              ]}
-            >
-              <BookOpen
-                size={20}
-                color={activeTab === 'lessons' ? '#60a5fa' : '#64748b'}
-              />
-            </View>
-            <Text
-              style={[
-                styles.tabLabel,
-                activeTab === 'lessons' && styles.tabLabelActive,
-              ]}
-            >
-              Lessons
-            </Text>
-          </TouchableOpacity>
-        </View>
+            Lessons
+          </Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  container: {
     flex: 1,
-    backgroundColor: '#0b1120',
+    backgroundColor: '#0f0a1e',
   },
-  appContainer: {
-    flex: 1,
-    backgroundColor: '#0b1120',
-  },
-  topHeader: {
-    backgroundColor: '#0f172a',
-    paddingHorizontal: 16,
+  header: {
+    paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 12,
+    paddingBottom: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#1e293b',
+    borderBottomColor: '#251b3d',
   },
   brandingRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  logoGroup: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
   appIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: '#2563eb',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#6d28d9',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#2563eb',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
   },
-  appName: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#f8fafc',
-    letterSpacing: 0.5,
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#f3f4f6',
   },
-  appTagline: {
-    fontSize: 11,
-    color: '#64748b',
-    fontWeight: '500',
+  headerSubtitle: {
+    fontSize: 12,
+    color: '#9ca3af',
   },
-  offlineStatusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-    gap: 5,
+  instrumentBar: {
+    marginTop: 14,
   },
-  offlineStatusText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#34d399',
-  },
-  instrumentSelectorContainer: {
+  instrumentBarContent: {
     flexDirection: 'row',
     gap: 8,
   },
   instrumentPill: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#1e293b',
-    paddingVertical: 10,
-    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: '#1e1435',
     borderWidth: 1,
-    borderColor: '#334155',
-    gap: 6,
+    borderColor: '#372a56',
   },
   instrumentPillActive: {
-    backgroundColor: '#1e3a8a',
-    borderColor: '#3b82f6',
+    backgroundColor: '#4c1d95',
+    borderColor: '#7c3aed',
   },
   instrumentPillText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#94a3b8',
+    color: '#9ca3af',
+    fontWeight: '500',
   },
   instrumentPillTextActive: {
     color: '#ffffff',
     fontWeight: '700',
   },
-  activeDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: '#60a5fa',
-  },
-  bodyContent: {
+  content: {
     flex: 1,
   },
-  scrollScreen: {
-    flex: 1,
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 32,
   },
-  scrollScreenContent: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 24,
-  },
-  bottomTabBar: {
+  navBar: {
     flexDirection: 'row',
-    backgroundColor: '#0f172a',
+    justifyContent: 'space-around',
+    paddingVertical: 10,
+    backgroundColor: '#150d2a',
     borderTopWidth: 1,
-    borderTopColor: '#1e293b',
-    paddingVertical: 8,
-    paddingBottom: 12,
+    borderTopColor: '#251b3d',
   },
-  tabButton: {
+  navButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
   },
-  tabIconContainer: {
-    padding: 4,
-    borderRadius: 10,
-  },
-  tabIconContainerActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-  },
-  tabLabel: {
+  navLabel: {
     fontSize: 11,
-    fontWeight: '600',
-    color: '#64748b',
+    color: '#6b7280',
+    fontWeight: '500',
   },
-  tabLabelActive: {
-    color: '#60a5fa',
+  navLabelActive: {
+    color: '#a78bfa',
     fontWeight: '700',
   },
 });

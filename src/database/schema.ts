@@ -90,7 +90,7 @@ export const DEFAULT_INSTRUMENT_IDS = {
 };
 
 // Open native SQLite database file on device
-const sqliteDb = SQLite.openDatabaseSync('cantabile.db');
+const sqliteDb = SQLite.openDatabaseSync('cantabile_v2.db');
 
 export class CantabileDatabase {
   private db: SQLite.SQLiteDatabase;
