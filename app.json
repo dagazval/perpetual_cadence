@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Perpetuum",
-    "slug": "Perpetuum",
+    "name": "Perpetual Cadence",
+    "slug": "Perpetual Cadence",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -35,8 +35,8 @@
     },
     "owner": "nomikkh",
     "updates": {
-      "url": "https://u.expo.dev/30ebc57c-987a-437c-9901-33b65ff013f8"
-    },
+  "enabled": false
+},
     "runtimeVersion": {
       "policy": "appVersion"
     }
