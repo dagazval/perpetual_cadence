@@ -88,27 +88,12 @@ export async function processLessonRecording(
   instrumentName: string,
   onProgress?: (stage: string) => void
 ): Promise<FactLessonSummary> {
-  const quota =
-    typeof (db as any).getQuota === 'function'
-      ? (db as any).getQuota()
-      : { lessons_processed_this_month: 0, max_lessons_per_month: 10 };
-
-  if (quota.lessons_processed_this_month >= quota.max_lessons_per_month) {
-    throw new Error(
-      `QUOTA_EXCEEDED (402): Monthly quota of ${quota.max_lessons_per_month} lesson analyses reached.`
-    );
-  }
-
-  // 1. Upload
+  // 1. Upload to Supabase Storage
   if (onProgress) onProgress('Uploading audio to Supabase Storage...');
-  console.log('[PIPELINE STEP 1] Uploading audio...');
   const uploadedPath = await uploadAudioToSupabase(file);
-  console.log('[PIPELINE STEP 1 COMPLETE] File path:', uploadedPath);
 
-  // 2. Invoke Edge Function
-  if (onProgress) onProgress('Transcribing & analyzing with Gemini in cloud...');
-  console.log(`[PIPELINE STEP 2] Calling supabase.functions.invoke('process-lesson-audio')...`);
-
+  // 2. Trigger Asynchronous Background Task
+  if (onProgress) onProgress('Queuing analysis in cloud background...');
   const invokeResponse = await supabase.functions.invoke('process-lesson-audio', {
     body: {
       filePath: uploadedPath,
@@ -118,50 +103,73 @@ export async function processLessonRecording(
     },
   });
 
-  console.log('[PIPELINE STEP 2 COMPLETE] Raw invoke response:', JSON.stringify(invokeResponse));
+  if (invokeResponse.error) {
+    throw new Error(`Edge Function trigger failed: ${invokeResponse.error.message}`);
+  }
 
-if (invokeResponse.error) {
-    console.error('[EDGE FUNCTION ERROR]', invokeResponse.error);
-    let serverDetail = invokeResponse.error.message;
+  const { jobId } = invokeResponse.data;
+  if (!jobId) throw new Error('Failed to retrieve background Job ID.');
 
-    // Supabase stores the actual HTTP response body inside error.context
-    if ((invokeResponse.error as any).context) {
-      try {
-        const body = await (invokeResponse.error as any).context.json();
-        serverDetail = body.error || JSON.stringify(body);
-      } catch {
-        try {
-          serverDetail = await (invokeResponse.error as any).context.text();
-        } catch {
-          // fallback to default message
-        }
-      }
+  // 3. Poll for Completion (bypasses the 150-second HTTP gateway limit)
+  if (onProgress) onProgress('Gemini analyzing audio (running in cloud)...');
+  
+  let attempts = 0;
+  const maxAttempts = 60; // 60 attempts * 5s = 5 minutes max runtime
+
+  while (attempts < maxAttempts) {
+    attempts++;
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const { data: job, error } = await supabase
+      .from('fact_lesson_jobs')
+      .select('status, error_message')
+      .eq('job_id', jobId)
+      .single();
+
+    if (error) {
+      console.warn('[POLL WARNING]', error.message);
+      continue;
     }
 
-    throw new Error(serverDetail);
+    if (job?.status === 'completed') {
+      break;
+    }
+
+    if (job?.status === 'failed') {
+      throw new Error(`Background job failed: ${job.error_message}`);
+    }
+
+    if (onProgress) {
+      onProgress(`Analyzing lesson with Gemini (${attempts * 5}s)...`);
+    }
   }
 
-  const data = invokeResponse.data;
-  if (!data || !data.analysis) {
-    throw new Error(`Edge Function returned no analysis data. Received: ${JSON.stringify(data)}`);
+  // 4. Fetch the generated summary from Supabase and sync down to local SQLite
+  if (onProgress) onProgress('Saving completed critique to local storage...');
+
+  const { data: latestSummaries, error: fetchErr } = await supabase
+    .from('fact_lesson_summaries')
+    .select('*')
+    .eq('instrument_id', instrumentId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (fetchErr || !latestSummaries || latestSummaries.length === 0) {
+    throw new Error('Lesson processed but summary record could not be retrieved.');
   }
 
-  // 3. Save locally
-  if (onProgress) onProgress('Saving critique and staging tags in local database...');
-  console.log('[PIPELINE STEP 3] Writing to local SQLite schema...');
+  const remote = latestSummaries[0];
 
-  const analysis = data.analysis;
-
+  // Save into local SQLite schema
   const summary = db.recordLessonSummary({
     instrument_id: instrumentId,
-    lesson_date: new Date().toISOString().slice(0, 10),
-    areas_of_growth: analysis.context_and_feedback?.areas_of_growth || [],
-    wins_and_strengths: analysis.context_and_feedback?.wins_and_strengths || [],
-    technique_mechanics_cues: analysis.technique_and_mechanics_cues || [],
-    suggested_focus_tags: analysis.suggested_focus_tags || [],
-    transcript_text: `Ingested ${file.name}. Evaluated for ${instrumentName}.`,
+    lesson_date: remote.lesson_date,
+    areas_of_growth: JSON.parse(remote.areas_of_growth),
+    wins_and_strengths: JSON.parse(remote.wins_and_strengths),
+    technique_mechanics_cues: JSON.parse(remote.technique_mechanics_cues),
+    suggested_focus_tags: [],
+    transcript_text: remote.transcript_text,
   });
 
-  console.log('[PIPELINE STEP 3 COMPLETE] Local summary saved:', summary.lesson_id);
   return summary;
 }
