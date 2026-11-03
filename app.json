@@ -18,7 +18,8 @@
     },
     "plugins": [
       "expo-sqlite",
-      "expo-router"
+      "expo-router",
+      "react-native-compressor"
     ],
     "experiments": {
       "typedRoutes": false
@@ -35,8 +36,8 @@
     },
     "owner": "nomikkh",
     "updates": {
-  "enabled": false
-},
+      "enabled": false
+    },
     "runtimeVersion": {
       "policy": "appVersion"
     }

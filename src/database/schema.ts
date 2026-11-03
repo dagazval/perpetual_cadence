@@ -84,9 +84,9 @@ export const CURRENT_USER_ID = '00000000-0000-0000-0000-000000000001';
 
 // Pre-defined UUIDs conforming to Supabase PostgreSQL constraints
 export const DEFAULT_INSTRUMENT_IDS = {
-  VOICE: '00000000-0000-0000-0000-000000000010',
-  PIANO: '00000000-0000-0000-0000-000000000020',
-  OBOE:  '00000000-0000-0000-0000-000000000030',
+  VOICE: '0fdab669-702b-42cc-88c3-044d5842b9a2',
+  PIANO: '201b6d93-7f20-4f47-92b1-cbdb5efc578d',
+  OBOE:  'f5a46c7f-c600-433d-9430-ba9f224c8d0d',
 };
 
 // Open native SQLite database file on device

@@ -108,17 +108,27 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
         return;
       }
 
-      const instId =
-        activeInstrument?.instrument_id || (activeInstrument as any)?.instrumentId || '00000000-0000-0000-0000-000000000010';
+      const instId = activeInstrument?.instrument_id || (activeInstrument as any)?.instrumentId;
       const instName = activeInstrument?.name || 'Voice';
+      const instUserId = activeInstrument?.user_id || '00000000-0000-0000-0000-000000000001';
 
-      console.log(`[DEBUG] 3. Starting pipeline for ${instName} (${instId})...`);
+      if (!instId) {
+        throw new Error('No active instrument selected or instrument ID is missing.');
+      }
+
+      console.log(`[DEBUG] 3. Starting pipeline for ${instName} (${instId}) for user ${instUserId}...`);
       setIsProcessing(true);
 
-      const result = await processLessonRecording(file, instId, instName, (stage) => {
-        console.log('[DEBUG Stage]:', stage);
-        setPipelineStage(stage);
-      });
+      const result = await processLessonRecording(
+        file,
+        instId,
+        instName,
+        instUserId,
+        (stage) => {
+          console.log('[DEBUG Stage]:', stage);
+          setPipelineStage(stage);
+        }
+      );
 
       console.log('[DEBUG] 4. Pipeline finished successfully:', result);
       setActiveLessonSummary(result);
@@ -127,9 +137,9 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
       if (typeof onTagsUpdated === 'function') {
         onTagsUpdated();
       }
-} catch (err: any) {
+    } catch (err: any) {
       console.error('[INGEST ERROR RAW]:', err);
-      
+
       const rawMessage = (err?.message || String(err)).toLowerCase();
       let alertTitle = 'Lesson Ingestion Notice';
       let alertBody = 'An unexpected issue occurred while analyzing the audio. Please try again.';
@@ -149,7 +159,6 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
         alertTitle = 'Network Connection Issue';
         alertBody = 'Could not reach the server. Please check your internet connection.';
       } else {
-        // Fallback with clean error snippet
         alertBody = err?.message?.replace(/\[.*?\]/g, '').trim() || alertBody;
       }
 

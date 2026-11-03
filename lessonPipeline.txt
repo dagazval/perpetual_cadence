@@ -1,6 +1,7 @@
 /**
  * Cantabile - Lesson Audio Pipeline
- * Native document picker, Supabase Storage upload, Edge Function trigger, & SQLite persistence
+ * Native document picker, Supabase Storage upload, Edge Function async trigger,
+ * polling job completion, and SQLite persistence.
  */
 
 import * as DocumentPicker from 'expo-document-picker';
@@ -48,7 +49,7 @@ export const pickLessonAudioFile = async (): Promise<PickedAudioFile | null> => 
 
 /**
  * Upload Audio to Supabase Storage Bucket ('lesson-recordings')
- * Reads raw ArrayBuffer directly to avoid Android OkHttp FormDataPart crashes.
+ * Reads raw ArrayBuffer directly to avoid Android OkHttp FormData crashes.
  */
 async function uploadAudioToSupabase(file: PickedAudioFile): Promise<string> {
   const timestamp = Date.now();
@@ -57,7 +58,6 @@ async function uploadAudioToSupabase(file: PickedAudioFile): Promise<string> {
 
   console.log(`[STORAGE] Reading file as ArrayBuffer from: ${file.uri}`);
 
-  // fetch(file.uri) to arrayBuffer is natively supported in Expo / React Native
   const response = await fetch(file.uri);
   const arrayBuffer = await response.arrayBuffer();
 
@@ -99,14 +99,14 @@ export async function processLessonRecording(
     );
   }
 
-  // 1. Upload
+  // 1. Upload to Supabase Storage
   if (onProgress) onProgress('Uploading audio to Supabase Storage...');
   console.log('[PIPELINE STEP 1] Uploading audio...');
   const uploadedPath = await uploadAudioToSupabase(file);
   console.log('[PIPELINE STEP 1 COMPLETE] File path:', uploadedPath);
 
-  // 2. Invoke Edge Function
-  if (onProgress) onProgress('Transcribing & analyzing with Gemini in cloud...');
+  // 2. Trigger Asynchronous Background Task
+  if (onProgress) onProgress('Queuing analysis in cloud background...');
   console.log(`[PIPELINE STEP 2] Calling supabase.functions.invoke('process-lesson-audio')...`);
 
   const invokeResponse = await supabase.functions.invoke('process-lesson-audio', {
@@ -118,36 +118,95 @@ export async function processLessonRecording(
     },
   });
 
-  console.log('[PIPELINE STEP 2 COMPLETE] Raw invoke response:', JSON.stringify(invokeResponse));
-
+  // Detailed error unmasking to display the root-cause message
   if (invokeResponse.error) {
-    console.error('[EDGE FUNCTION ERROR]', invokeResponse.error);
-    throw new Error(
-      `Edge Function invoke failed: ${invokeResponse.error.message || JSON.stringify(invokeResponse.error)}`
-    );
+    let detail = invokeResponse.error.message;
+    if ((invokeResponse.error as any).context) {
+      try {
+        const errJson = await (invokeResponse.error as any).context.json();
+        detail = errJson.error || JSON.stringify(errJson);
+      } catch {
+        try {
+          detail = await (invokeResponse.error as any).context.text();
+        } catch {}
+      }
+    }
+    console.error('[EDGE FUNCTION ERROR DETAIL]:', detail);
+    throw new Error(`Edge Function trigger failed: ${detail}`);
   }
 
-  const data = invokeResponse.data;
-  if (!data || !data.analysis) {
-    throw new Error(`Edge Function returned no analysis data. Received: ${JSON.stringify(data)}`);
+  const { jobId } = invokeResponse.data || {};
+  if (!jobId) {
+    throw new Error(`Failed to retrieve background Job ID. Response: ${JSON.stringify(invokeResponse.data)}`);
   }
 
-  // 3. Save locally
-  if (onProgress) onProgress('Saving critique and staging tags in local database...');
-  console.log('[PIPELINE STEP 3] Writing to local SQLite schema...');
+  console.log(`[PIPELINE STEP 2 COMPLETE] Background Job started with ID: ${jobId}`);
 
-  const analysis = data.analysis;
+  // 3. Poll for Completion (bypasses the 150-second HTTP gateway limit)
+  if (onProgress) onProgress('Gemini analyzing audio (running in cloud)...');
 
+  let attempts = 0;
+  const maxAttempts = 60; // 60 attempts * 5s = 5 minutes max runtime
+
+  while (attempts < maxAttempts) {
+    attempts++;
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const { data: job, error } = await supabase
+      .from('fact_lesson_jobs')
+      .select('status, error_message')
+      .eq('job_id', jobId)
+      .single();
+
+    if (error) {
+      console.warn('[POLL WARNING]', error.message);
+      continue;
+    }
+
+    if (job?.status === 'completed') {
+      console.log(`[POLL SUCCESS] Job ${jobId} completed.`);
+      break;
+    }
+
+    if (job?.status === 'failed') {
+      throw new Error(`Background job failed: ${job.error_message}`);
+    }
+
+    if (onProgress) {
+      onProgress(`Analyzing lesson with Gemini (${attempts * 5}s)...`);
+    }
+  }
+
+  if (attempts >= maxAttempts) {
+    throw new Error('Lesson processing timed out after 5 minutes in background queue.');
+  }
+
+  // 4. Fetch the generated summary from Supabase and sync down to local SQLite
+  if (onProgress) onProgress('Saving completed critique to local storage...');
+
+  const { data: latestSummaries, error: fetchErr } = await supabase
+    .from('fact_lesson_summaries')
+    .select('*')
+    .eq('instrument_id', instrumentId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (fetchErr || !latestSummaries || latestSummaries.length === 0) {
+    throw new Error('Lesson processed but summary record could not be retrieved from Supabase.');
+  }
+
+  const remote = latestSummaries[0];
+
+  // Save into local SQLite schema
   const summary = db.recordLessonSummary({
     instrument_id: instrumentId,
-    lesson_date: new Date().toISOString().slice(0, 10),
-    areas_of_growth: analysis.context_and_feedback?.areas_of_growth || [],
-    wins_and_strengths: analysis.context_and_feedback?.wins_and_strengths || [],
-    technique_mechanics_cues: analysis.technique_and_mechanics_cues || [],
-    suggested_focus_tags: analysis.suggested_focus_tags || [],
-    transcript_text: `Ingested ${file.name}. Evaluated for ${instrumentName}.`,
+    lesson_date: remote.lesson_date,
+    areas_of_growth: JSON.parse(remote.areas_of_growth),
+    wins_and_strengths: JSON.parse(remote.wins_and_strengths),
+    technique_mechanics_cues: JSON.parse(remote.technique_mechanics_cues),
+    suggested_focus_tags: [],
+    transcript_text: remote.transcript_text,
   });
 
-  console.log('[PIPELINE STEP 3 COMPLETE] Local summary saved:', summary.lesson_id);
   return summary;
 }

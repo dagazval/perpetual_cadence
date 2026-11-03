@@ -109,7 +109,7 @@ export const AiLessonAnalyzer: React.FC<AiLessonAnalyzerProps> = ({
       }
 
       const instId =
-        activeInstrument?.instrument_id || (activeInstrument as any)?.instrumentId || 'inst-voice-001';
+        activeInstrument?.instrument_id || (activeInstrument as any)?.instrumentId || '0fdab669-702b-42cc-88c3-044d5842b9a2';
       const instName = activeInstrument?.name || 'Voice';
 
       console.log(`[DEBUG] 3. Starting pipeline for ${instName} (${instId})...`);
