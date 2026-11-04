@@ -1,20 +1,20 @@
 /**
  * Cantabile - Lesson Audio Pipeline
- * Native document picker, client-side audio downsampling (16kHz mono),
- * Supabase Storage upload, synchronous Edge Function invoke, & SQLite persistence.
+ * Native document picker, Supabase Storage upload, Edge Function trigger,
+ * and dual persistence (Local SQLite + Supabase Cloud PostgreSQL).
  */
 
 import * as DocumentPicker from 'expo-document-picker';
-import { db, FactLessonSummary } from '../database/schema';
+import { CURRENT_USER_ID, db, FactLessonSummary } from '../database/schema';
 import { supabase } from './supabaseClient';
 
-// Safe dynamic import pattern for react-native-compressor
-let CompressorAudio: any = null;
-try {
-  const compressorModule = require('react-native-compressor');
-  CompressorAudio = compressorModule.Audio;
-} catch {
-  console.warn('[COMPRESSOR] react-native-compressor native bindings not found, defaulting to raw upload.');
+// Pure JS RFC 4122 v4 UUID generator (works across Hermes & Expo without crypto polyfills)
+function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 export interface PickedAudioFile {
@@ -57,57 +57,17 @@ export const pickLessonAudioFile = async (): Promise<PickedAudioFile | null> => 
 };
 
 /**
- * Downsamples audio to 16kHz mono AAC.
- * Reduces 30-50MB files to ~4-6MB in seconds on your Pixel's hardware.
- */
-async function compressAudioFile(
-  fileUri: string,
-  onProgress?: (stage: string) => void
-): Promise<string> {
-  if (!CompressorAudio || typeof CompressorAudio.compress !== 'function') {
-    console.log('[COMPRESSOR] Native compressor unavailable; passing original file URI.');
-    return fileUri;
-  }
-
-  try {
-    if (onProgress) onProgress('Downsampling audio to 16kHz mono AAC...');
-    console.log(`[COMPRESSOR] Compressing file at: ${fileUri}`);
-
-    const compressedUri = await CompressorAudio.compress(
-      fileUri,
-      {
-        quality: 'medium', // Optimizes bitrate while preserving vocal clarity
-      },
-      (progress: number) => {
-        if (onProgress) {
-          onProgress(`Compressing audio (${Math.round(progress * 100)}%)...`);
-        }
-      }
-    );
-
-    console.log(`[COMPRESSOR SUCCESS] Compressed URI: ${compressedUri}`);
-    return compressedUri;
-  } catch (compressErr) {
-    console.warn('[COMPRESSOR ERROR] Downsampling failed, falling back to original file:', compressErr);
-    return fileUri;
-  }
-}
-
-/**
  * Upload Audio to Supabase Storage Bucket ('lesson-recordings')
  * Reads raw ArrayBuffer directly to avoid Android OkHttp FormData crashes.
  */
-async function uploadAudioToSupabase(
-  uri: string,
-  fileName: string,
-  mimeType: string
-): Promise<string> {
+async function uploadAudioToSupabase(file: PickedAudioFile): Promise<string> {
   const timestamp = Date.now();
-  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const filePath = `uploads/${timestamp}_${safeName}`;
 
-  console.log(`[STORAGE] Reading binary buffer from: ${uri}`);
-  const response = await fetch(uri);
+  console.log(`[STORAGE] Reading file as ArrayBuffer from: ${file.uri}`);
+
+  const response = await fetch(file.uri);
   const arrayBuffer = await response.arrayBuffer();
 
   console.log(`[STORAGE] Uploading ArrayBuffer (${arrayBuffer.byteLength} bytes) to 'lesson-recordings'...`);
@@ -115,7 +75,7 @@ async function uploadAudioToSupabase(
   const { data, error } = await supabase.storage
     .from('lesson-recordings')
     .upload(filePath, arrayBuffer, {
-      contentType: mimeType || 'audio/mp4',
+      contentType: file.mimeType || 'audio/m4a',
       upsert: true,
     });
 
@@ -149,21 +109,16 @@ export async function processLessonRecording(
     );
   }
 
-  // 1. Client-Side Audio Downsampling
-  const effectiveUri = await compressAudioFile(file.uri, onProgress);
+  const effectiveUserId = userId || CURRENT_USER_ID || '00000000-0000-0000-0000-000000000001';
 
-  // 2. Upload Compressed Binary to Supabase Storage
-  if (onProgress) onProgress('Uploading lightweight audio to Supabase Storage...');
+  // 1. Upload to Supabase Storage
+  if (onProgress) onProgress('Uploading audio to Supabase Storage...');
   console.log('[PIPELINE STEP 1] Uploading audio...');
-  const uploadedPath = await uploadAudioToSupabase(
-    effectiveUri,
-    file.name,
-    file.mimeType || 'audio/mp4'
-  );
-  console.log('[PIPELINE STEP 1 COMPLETE] Storage path:', uploadedPath);
+  const uploadedPath = await uploadAudioToSupabase(file);
+  console.log('[PIPELINE STEP 1 COMPLETE] File path:', uploadedPath);
 
-  // 3. Invoke Cloud Edge Function
-  if (onProgress) onProgress('Evaluating pedagogical critique with Gemini...');
+  // 2. Invoke Cloud Edge Function
+  if (onProgress) onProgress('Transcribing & analyzing with Gemini in cloud...');
   console.log(`[PIPELINE STEP 2] Calling supabase.functions.invoke('process-lesson-audio')...`);
 
   const invokeResponse = await supabase.functions.invoke('process-lesson-audio', {
@@ -171,7 +126,7 @@ export async function processLessonRecording(
       filePath: uploadedPath,
       instrumentName,
       instrumentId,
-      userId: userId || '00000000-0000-0000-0000-000000000001',
+      userId: effectiveUserId,
     },
   });
 
@@ -191,25 +146,100 @@ export async function processLessonRecording(
     throw new Error(`Edge Function trigger failed: ${detail}`);
   }
 
-  const { analysis } = invokeResponse.data || {};
-  if (!analysis) {
-    throw new Error(`Edge Function completed but returned no analysis data. Data: ${JSON.stringify(invokeResponse.data)}`);
+  const data = invokeResponse.data;
+  if (!data || !data.analysis) {
+    throw new Error(`Edge Function returned no analysis data. Received: ${JSON.stringify(data)}`);
   }
 
-  // 4. Save analysis locally to SQLite schema
-  if (onProgress) onProgress('Saving critique and staging tags in local database...');
+  const analysis = data.analysis;
+
+// 3. Save locally to SQLite schema
+  if (onProgress) onProgress('Saving critique to local database...');
   console.log('[PIPELINE STEP 3] Writing to local SQLite schema...');
+
+  const today = new Date().toISOString().slice(0, 10);
+  const areasOfGrowth = analysis.context_and_feedback?.areas_of_growth || [];
+  const winsAndStrengths = analysis.context_and_feedback?.wins_and_strengths || [];
+  const techniqueMechanicsCues = analysis.technique_and_mechanics_cues || [];
+  const suggestedFocusTags = analysis.suggested_focus_tags || [];
+  const transcriptText = `Ingested ${file.name}. Evaluated for ${instrumentName}.`;
+
+  // Use the safe RFC 4122 UUID generator
+  const validUuid = generateUUID();
 
   const summary = db.recordLessonSummary({
     instrument_id: instrumentId,
-    lesson_date: new Date().toISOString().slice(0, 10),
-    areas_of_growth: analysis.context_and_feedback?.areas_of_growth || [],
-    wins_and_strengths: analysis.context_and_feedback?.wins_and_strengths || [],
-    technique_mechanics_cues: analysis.technique_and_mechanics_cues || [],
-    suggested_focus_tags: analysis.suggested_focus_tags || [],
-    transcript_text: `Ingested ${file.name}. Evaluated for ${instrumentName}.`,
+    lesson_date: today,
+    areas_of_growth: areasOfGrowth,
+    wins_and_strengths: winsAndStrengths,
+    technique_mechanics_cues: techniqueMechanicsCues,
+    suggested_focus_tags: suggestedFocusTags,
+    transcript_text: transcriptText,
   });
 
   console.log('[PIPELINE STEP 3 COMPLETE] Local summary saved:', summary.lesson_id);
+
+  // 4. Dual-Write to Supabase Cloud PostgreSQL
+  try {
+    if (onProgress) onProgress('Syncing summary to cloud backup...');
+    console.log('[PIPELINE STEP 4] Writing summary to Supabase PostgreSQL...');
+
+    const cloudSummaryPayload = {
+      lesson_id: validUuid,
+      user_id: effectiveUserId,
+      instrument_id: instrumentId,
+      lesson_date: summary.lesson_date,
+      areas_of_growth: summary.areas_of_growth,
+      wins_and_strengths: summary.wins_and_strengths,
+      technique_mechanics_cues: summary.technique_mechanics_cues,
+      transcript_text: summary.transcript_text,
+    };
+
+    const { data: insertedData, error: sbError } = await supabase
+      .from('fact_lesson_summaries')
+      .insert(cloudSummaryPayload)
+      .select();
+
+    if (sbError) {
+      console.error('================================================');
+      console.error('[SUPABASE INSERT REJECTED]:', sbError.message);
+      console.error('[SUPABASE ERROR DETAILS]:', JSON.stringify(sbError, null, 2));
+      console.error('================================================');
+    } else {
+      console.log('[SUPABASE INSERT SUCCESS] Row written to cloud fact_lesson_summaries!', insertedData);
+    }
+
+    // Dual-write suggested tags into cloud dim_tags
+    if (suggestedFocusTags.length > 0) {
+      const cloudTagPayloads = suggestedFocusTags.map((tagRaw: string) => {
+        const words = String(tagRaw).trim().split(/\s+/).slice(0, 2);
+        const formatted = words
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+          .join(' ');
+
+        return {
+          user_id: effectiveUserId,
+          instrument_id: instrumentId,
+          tag_name: formatted,
+          tag_type: 'Technique Focus',
+          status: 'staged',
+          source: 'lesson_extracted',
+        };
+      });
+
+      const { error: tagError } = await supabase
+        .from('dim_tags')
+        .upsert(cloudTagPayloads, { onConflict: 'instrument_id,tag_name' });
+
+      if (tagError) {
+        console.warn('[SUPABASE TAG WARNING]:', tagError.message);
+      } else {
+        console.log('[SUPABASE TAG SUCCESS] Staged tags written to cloud dim_tags!');
+      }
+    }
+  } catch (cloudErr) {
+    console.error('[CLOUD DUAL-WRITE UNCAUGHT EXCEPTION]:', cloudErr);
+  }
+
   return summary;
 }

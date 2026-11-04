@@ -4,6 +4,8 @@
  */
 import * as SQLite from 'expo-sqlite';
 
+import { supabase } from '../services/supabaseClient'; // ensure supabase client is imported
+
 export interface DimInstrument {
   instrument_id: string;
   user_id: string;
@@ -318,12 +320,54 @@ export class CantabileDatabase {
     return newTag;
   }
 
-  public approveStagedTag(tagId: string): void {
+public approveStagedTag(tagId: string): void {
+    // 1. Retrieve the tag details BEFORE altering local state
+    const tag = this.db.getFirstSync<DimTag>(`SELECT * FROM dim_tags WHERE tag_id = ?;`, [tagId]);
+
+    // 2. Update local SQLite
     this.db.runSync(`UPDATE dim_tags SET status = 'active' WHERE tag_id = ?;`, [tagId]);
+
+    // 3. Update Supabase Cloud
+    if (tag) {
+      supabase
+        .from('dim_tags')
+        .update({ status: 'active' })
+        .eq('instrument_id', tag.instrument_id)
+        .eq('tag_name', tag.tag_name.trim())
+        .select()
+        .then(({ data, error }) => {
+          if (error) {
+            console.error('[SUPABASE TAG APPROVE ERROR]:', error.message);
+          } else {
+            console.log(`[SUPABASE TAG APPROVE SUCCESS]: Updated ${data?.length || 0} row(s) for "${tag.tag_name}"`);
+          }
+        });
+    }
   }
 
-  public discardStagedTag(tagId: string): void {
+public discardStagedTag(tagId: string): void {
+    // 1. Retrieve the tag details BEFORE deleting locally
+    const tag = this.db.getFirstSync<DimTag>(`SELECT * FROM dim_tags WHERE tag_id = ?;`, [tagId]);
+
+    // 2. Delete from local SQLite
     this.db.runSync(`DELETE FROM dim_tags WHERE tag_id = ?;`, [tagId]);
+
+    // 3. Delete from Supabase Cloud
+    if (tag) {
+      supabase
+        .from('dim_tags')
+        .delete()
+        .eq('instrument_id', tag.instrument_id)
+        .eq('tag_name', tag.tag_name.trim())
+        .select()
+        .then(({ data, error }) => {
+          if (error) {
+            console.error('[SUPABASE TAG DISCARD ERROR]:', error.message);
+          } else {
+            console.log(`[SUPABASE TAG DISCARD SUCCESS]: Deleted ${data?.length || 0} row(s) for "${tag.tag_name}"`);
+          }
+        });
+    }
   }
 
   // Core Fact: Practice Sessions
