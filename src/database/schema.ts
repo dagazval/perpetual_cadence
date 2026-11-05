@@ -345,29 +345,39 @@ public approveStagedTag(tagId: string): void {
     }
   }
 
-public discardStagedTag(tagId: string): void {
-    // 1. Retrieve the tag details BEFORE deleting locally
-    const tag = this.db.getFirstSync<DimTag>(`SELECT * FROM dim_tags WHERE tag_id = ?;`, [tagId]);
+public discardStagedTag(identifier: string, instrumentId?: string): void {
+    // 1. Find the tag record locally by tag_id OR by tag_name
+    let tag = this.db.getFirstSync<DimTag>(
+      `SELECT * FROM dim_tags WHERE tag_id = ? OR tag_name = ? LIMIT 1;`,
+      [identifier, identifier]
+    );
 
-    // 2. Delete from local SQLite
-    this.db.runSync(`DELETE FROM dim_tags WHERE tag_id = ?;`, [tagId]);
+    const targetName = tag ? tag.tag_name : identifier;
+    const targetInstrument = tag ? tag.instrument_id : instrumentId;
 
-    // 3. Delete from Supabase Cloud
-    if (tag) {
-      supabase
-        .from('dim_tags')
-        .delete()
-        .eq('instrument_id', tag.instrument_id)
-        .eq('tag_name', tag.tag_name.trim())
-        .select()
-        .then(({ data, error }) => {
-          if (error) {
-            console.error('[SUPABASE TAG DISCARD ERROR]:', error.message);
-          } else {
-            console.log(`[SUPABASE TAG DISCARD SUCCESS]: Deleted ${data?.length || 0} row(s) for "${tag.tag_name}"`);
-          }
-        });
+    console.log(`[DISCARD DEBUG] Local tag lookup for "${identifier}":`, JSON.stringify(tag));
+
+    // 2. Delete locally from SQLite
+    this.db.runSync(
+      `DELETE FROM dim_tags WHERE tag_id = ? OR tag_name = ?;`,
+      [identifier, identifier]
+    );
+
+    // 3. Delete remotely from Supabase
+    let query = supabase.from('dim_tags').delete().ilike('tag_name', targetName.trim());
+    if (targetInstrument) {
+      query = query.eq('instrument_id', targetInstrument);
     }
+
+    query
+      .select()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('[SUPABASE DISCARD ERROR]:', error.message);
+        } else {
+          console.log(`[SUPABASE DISCARD SUCCESS] Deleted count: ${data?.length || 0}`, data);
+        }
+      });
   }
 
   // Core Fact: Practice Sessions
@@ -440,6 +450,18 @@ public discardStagedTag(tagId: string): void {
     });
 
     return { session, xpEarned };
+  }
+
+// Inside src/database/schema.ts, within the CantabileDatabase class:
+
+  public resetMonthlyQuota(): void {
+    this.db.runSync(
+      `UPDATE user_quotas 
+       SET lessons_processed_this_month = 0, max_lessons_per_month = 100 
+       WHERE user_id = ?;`,
+      [CURRENT_USER_ID]
+    );
+    console.log('[QUOTA] Local monthly quota reset to 0 / 100.');
   }
 
   // Practice Log Query
@@ -620,7 +642,9 @@ public discardStagedTag(tagId: string): void {
         ]
       );
 
-      // 2. Stage suggested focus tags into dim_tags (status = 'staged')
+
+
+// 2. Stage suggested focus tags into dim_tags (status = 'staged')
       for (const tagRaw of data.suggested_focus_tags) {
         const trimmed = tagRaw.trim();
         const words = trimmed.split(/\s+/);
@@ -630,8 +654,10 @@ public discardStagedTag(tagId: string): void {
           .join(' ');
 
         if (formatted.length > 0) {
+          // >>> PUT THE CHECK RIGHT HERE <<<
           const existing = this.db.getFirstSync<{ tag_id: string }>(
-            `SELECT tag_id FROM dim_tags WHERE instrument_id = ? AND lower(tag_name) = lower(?);`,
+            `SELECT tag_id FROM dim_tags 
+             WHERE instrument_id = ? AND lower(trim(tag_name)) = lower(?);`,
             [data.instrument_id, formatted]
           );
 

@@ -208,33 +208,54 @@ export async function processLessonRecording(
     } else {
       console.log('[SUPABASE INSERT SUCCESS] Row written to cloud fact_lesson_summaries!', insertedData);
     }
+    // ... rest of step 4 remains intact
 
-    // Dual-write suggested tags into cloud dim_tags
+// Dual-write suggested tags into cloud dim_tags without duplicates
     if (suggestedFocusTags.length > 0) {
-      const cloudTagPayloads = suggestedFocusTags.map((tagRaw: string) => {
+      // 1. Fetch existing tags for this instrument from Supabase
+      const { data: existingTags } = await supabase
+        .from('dim_tags')
+        .select('tag_name')
+        .eq('instrument_id', instrumentId);
+
+      const existingSet = new Set(
+        (existingTags || []).map((t) => t.tag_name.trim().toLowerCase())
+      );
+
+      // 2. Filter out any tag that already exists
+      const newTagPayloads: any[] = [];
+      for (const tagRaw of suggestedFocusTags) {
         const words = String(tagRaw).trim().split(/\s+/).slice(0, 2);
         const formatted = words
           .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
           .join(' ');
 
-        return {
-          user_id: effectiveUserId,
-          instrument_id: instrumentId,
-          tag_name: formatted,
-          tag_type: 'Technique Focus',
-          status: 'staged',
-          source: 'lesson_extracted',
-        };
-      });
+        if (formatted.length > 0 && !existingSet.has(formatted.toLowerCase())) {
+          existingSet.add(formatted.toLowerCase());
+          newTagPayloads.push({
+            user_id: effectiveUserId,
+            instrument_id: instrumentId,
+            tag_name: formatted,
+            tag_type: 'Technique Focus',
+            status: 'staged',
+            source: 'lesson_extracted',
+          });
+        }
+      }
 
-      const { error: tagError } = await supabase
-        .from('dim_tags')
-        .upsert(cloudTagPayloads, { onConflict: 'instrument_id,tag_name' });
+      // 3. Insert only the truly new tags
+      if (newTagPayloads.length > 0) {
+        const { error: tagError } = await supabase
+          .from('dim_tags')
+          .insert(newTagPayloads);
 
-      if (tagError) {
-        console.warn('[SUPABASE TAG WARNING]:', tagError.message);
+        if (tagError) {
+          console.warn('[SUPABASE TAG WARNING]:', tagError.message);
+        } else {
+          console.log(`[SUPABASE TAG SUCCESS] Staged ${newTagPayloads.length} new unique tags.`);
+        }
       } else {
-        console.log('[SUPABASE TAG SUCCESS] Staged tags written to cloud dim_tags!');
+        console.log('[SUPABASE TAG INFO] All suggested tags already exist. Skipping insert.');
       }
     }
   } catch (cloudErr) {
