@@ -1,13 +1,11 @@
-
 import {
   BarChart2,
   BookOpen,
   Music,
   Timer,
 } from 'lucide-react-native';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -15,6 +13,10 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { AiLessonAnalyzer } from './components/AiLessonAnalyzer';
 import { PracticeLog } from './components/PracticeLog';
 import { PracticeStopwatch } from './components/PracticeStopwatch';
@@ -33,17 +35,8 @@ const FALLBACK_INSTRUMENT: DimInstrument = {
   created_at: new Date().toISOString(),
 };
 
-export default function App() {
-
-    // Reset quota on launch for testing
-  React.useEffect(() => {
-    try {
-      db.resetMonthlyQuota();
-    } catch (e) {
-      console.warn('[QUOTA RESET ERROR]:', e);
-    }
-  }, []);
-
+function MainApp() {
+  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<ActiveTab>('practice');
   const [instruments, setInstruments] = useState<DimInstrument[]>(() => {
     try {
@@ -75,7 +68,7 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top }]} >
       <StatusBar barStyle="light-content" />
 
       {/* Header & Instrument Selector */}
@@ -123,7 +116,7 @@ export default function App() {
 
       {/* Main Tab Screen Area */}
       <View style={styles.content}>
-        {activeTab === 'practice' && (
+        <View style={[styles.tabContainer, activeTab !== 'practice' && styles.hiddenTab]}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <PracticeStopwatch
               key={`stopwatch-${activeInstrument.instrument_id}-${refreshTrigger}`}
@@ -131,9 +124,9 @@ export default function App() {
               onSessionSaved={handleDataChanged}
             />
           </ScrollView>
-        )}
+        </View>
 
-        {activeTab === 'progress' && (
+        <View style={[styles.tabContainer, activeTab !== 'progress' && styles.hiddenTab]}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <RollingConsistencyCard
               key={`consistency-${activeInstrument.instrument_id}-${refreshTrigger}`}
@@ -147,9 +140,9 @@ export default function App() {
               />
             </View>
           </ScrollView>
-        )}
+        </View>
 
-        {activeTab === 'lessons' && (
+        <View style={[styles.tabContainer, activeTab !== 'lessons' && styles.hiddenTab]}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <AiLessonAnalyzer
               key={`lessons-${activeInstrument.instrument_id}-${refreshTrigger}`}
@@ -157,11 +150,11 @@ export default function App() {
               onTagsUpdated={handleDataChanged}
             />
           </ScrollView>
-        )}
+        </View>
       </View>
 
-      {/* Bottom Navigation Bar */}
-      <View style={styles.navBar}>
+      {/* Bottom Navigation Bar with Dynamic Bottom Inset */}
+      <View style={[styles.navBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         <TouchableOpacity
           style={styles.navButton}
           onPress={() => setActiveTab('practice')}
@@ -216,7 +209,15 @@ export default function App() {
           </Text>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <MainApp />
+    </SafeAreaProvider>
   );
 }
 
@@ -227,7 +228,7 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 8,
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#251b3d',
@@ -285,6 +286,12 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  tabContainer: {
+    flex: 1,
+  },
+  hiddenTab: {
+    display: 'none',
+  },
   scrollContent: {
     padding: 16,
     paddingBottom: 32,
@@ -292,7 +299,7 @@ const styles = StyleSheet.create({
   navBar: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    paddingVertical: 10,
+    paddingTop: 10,
     backgroundColor: '#150d2a',
     borderTopWidth: 1,
     borderTopColor: '#251b3d',

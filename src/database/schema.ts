@@ -94,6 +94,15 @@ export const DEFAULT_INSTRUMENT_IDS = {
 // Open native SQLite database file on device
 const sqliteDb = SQLite.openDatabaseSync('cantabile_v2.db');
 
+// Pure JS RFC 4122 v4 UUID generator (Hermes / React Native safe)
+export function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export class CantabileDatabase {
   private db: SQLite.SQLiteDatabase;
 
@@ -102,6 +111,46 @@ export class CantabileDatabase {
     this.initDatabase();
   }
 
+public async syncPracticeSessionsFromCloud(instrumentId?: string): Promise<void> {
+    try {
+      let query = supabase.from('fact_practice_sessions').select('*');
+      if (instrumentId) {
+        query = query.eq('instrument_id', instrumentId);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        console.error('[SUPABASE RESTORE ERROR]:', error.message);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        for (const row of data) {
+          // INSERT OR IGNORE avoids duplicates if rows already exist locally
+          this.db.runSync(
+            `INSERT OR IGNORE INTO fact_practice_sessions 
+              (session_id, user_id, instrument_id, started_at, ended_at, duration_seconds, xp_earned, counts_for_streak, sync_status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?);`,
+            [
+              row.session_id,
+              row.user_id || CURRENT_USER_ID,
+              row.instrument_id,
+              row.started_at,
+              row.ended_at,
+              row.duration_seconds,
+              row.xp_earned ?? (Math.floor(row.duration_seconds / 60) * 10),
+              row.counts_for_streak ? 1 : 0,
+              row.created_at || new Date().toISOString(),
+            ]
+          );
+        }
+        console.log(`[LOCAL RECONCILIATION]: Synced ${data.length} session(s) from Supabase.`);
+      }
+    } catch (err) {
+      console.error('[CLOUD SYNC EXCEPTION]:', err);
+    }
+  }
+  
   private initDatabase(): void {
     try {
       this.db.execSync(`
@@ -346,8 +395,8 @@ public approveStagedTag(tagId: string): void {
   }
 
 public discardStagedTag(identifier: string, instrumentId?: string): void {
-    // 1. Find the tag record locally by tag_id OR by tag_name
-    let tag = this.db.getFirstSync<DimTag>(
+    // 1. Retrieve the tag BEFORE deleting locally (matching tag_id or tag_name)
+    const tag = this.db.getFirstSync<DimTag>(
       `SELECT * FROM dim_tags WHERE tag_id = ? OR tag_name = ? LIMIT 1;`,
       [identifier, identifier]
     );
@@ -355,7 +404,7 @@ public discardStagedTag(identifier: string, instrumentId?: string): void {
     const targetName = tag ? tag.tag_name : identifier;
     const targetInstrument = tag ? tag.instrument_id : instrumentId;
 
-    console.log(`[DISCARD DEBUG] Local tag lookup for "${identifier}":`, JSON.stringify(tag));
+    console.log(`[DISCARD] Found local tag before delete:`, JSON.stringify(tag));
 
     // 2. Delete locally from SQLite
     this.db.runSync(
@@ -364,7 +413,11 @@ public discardStagedTag(identifier: string, instrumentId?: string): void {
     );
 
     // 3. Delete remotely from Supabase
-    let query = supabase.from('dim_tags').delete().ilike('tag_name', targetName.trim());
+    let query = supabase
+      .from('dim_tags')
+      .delete()
+      .ilike('tag_name', targetName.trim());
+
     if (targetInstrument) {
       query = query.eq('instrument_id', targetInstrument);
     }
@@ -373,20 +426,20 @@ public discardStagedTag(identifier: string, instrumentId?: string): void {
       .select()
       .then(({ data, error }) => {
         if (error) {
-          console.error('[SUPABASE DISCARD ERROR]:', error.message);
+          console.error('[SUPABASE TAG DISCARD ERROR]:', error.message);
         } else {
-          console.log(`[SUPABASE DISCARD SUCCESS] Deleted count: ${data?.length || 0}`, data);
+          console.log(`[SUPABASE TAG DISCARD SUCCESS]: Deleted ${data?.length || 0} row(s) for "${targetName}"`);
         }
       });
   }
 
   // Core Fact: Practice Sessions
-  public recordSession(data: {
+public recordSession(data: {
     instrument_id: string;
     started_at: string;
     ended_at: string;
     duration_seconds: number;
-    tag_ids: string[];
+    tag_ids?: string[];
   }): { session: FactPracticeSession; xpEarned: number } {
     if (data.duration_seconds < 300) {
       throw new Error('Session under 300 seconds discarded per low-friction threshold rule.');
@@ -410,6 +463,7 @@ public discardStagedTag(identifier: string, instrumentId?: string): void {
       created_at: nowIso,
     };
 
+    // 1. Transactional write to local SQLite
     this.db.withTransactionSync(() => {
       this.db.runSync(
         `INSERT INTO fact_practice_sessions (
@@ -430,14 +484,17 @@ public discardStagedTag(identifier: string, instrumentId?: string): void {
         ]
       );
 
-      for (const tagId of data.tag_ids) {
-        this.db.runSync(
-          `INSERT OR IGNORE INTO bridge_session_tags (session_id, tag_id, user_id)
-           VALUES (?, ?, ?);`,
-          [sessionId, tagId, CURRENT_USER_ID]
-        );
+      if (data.tag_ids && data.tag_ids.length > 0) {
+        for (const tagId of data.tag_ids) {
+          this.db.runSync(
+            `INSERT OR IGNORE INTO bridge_session_tags (session_id, tag_id, user_id)
+             VALUES (?, ?, ?);`,
+            [sessionId, tagId, CURRENT_USER_ID]
+          );
+        }
       }
 
+      // Update instrument XP and level
       const inst = this.getInstrumentById(data.instrument_id);
       if (inst) {
         const newXp = inst.current_xp + xpEarned;
@@ -449,9 +506,35 @@ public discardStagedTag(identifier: string, instrumentId?: string): void {
       }
     });
 
+    // 2. Dual-write to Supabase (supplying user_id explicitly)
+    try {
+      supabase
+        .from('fact_practice_sessions')
+        .insert({
+          session_id: sessionId,
+          user_id: CURRENT_USER_ID,
+          instrument_id: session.instrument_id,
+          started_at: session.started_at,
+          ended_at: session.ended_at,
+          duration_seconds: session.duration_seconds,
+          xp_earned: session.xp_earned,
+          counts_for_streak: session.counts_for_streak,
+          sync_status: 'synced',
+          created_at: nowIso,
+        })
+        .then(({ error }) => {
+          if (error) {
+            console.warn('[SUPABASE PRACTICE SYNC WARNING]:', error.message);
+          } else {
+            console.log(`[SUPABASE PRACTICE SYNC SUCCESS]: Saved session ${sessionId}`);
+          }
+        });
+    } catch (err) {
+      console.warn('[SUPABASE SYNC DISPATCH FAILED]:', err);
+    }
+
     return { session, xpEarned };
   }
-
 // Inside src/database/schema.ts, within the CantabileDatabase class:
 
   public resetMonthlyQuota(): void {
