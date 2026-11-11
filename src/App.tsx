@@ -1,10 +1,11 @@
+import * as MediaLibrary from 'expo-media-library';
 import {
   BarChart2,
   BookOpen,
   Music,
   Timer,
 } from 'lucide-react-native';
-import { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ScrollView,
   StatusBar,
@@ -17,7 +18,10 @@ import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import ViewShot, { captureRef } from 'react-native-view-shot';
+
 import { AiLessonAnalyzer } from './components/AiLessonAnalyzer';
+import { CyberJuryLockscreen } from './components/CyberJuryLockscreen';
 import { PracticeLog } from './components/PracticeLog';
 import { PracticeStopwatch } from './components/PracticeStopwatch';
 import { RollingConsistencyCard } from './components/RollingConsistencyCard';
@@ -53,22 +57,112 @@ function MainApp() {
   );
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
+  // Hidden off-screen ViewShot reference for generating wallpaper bitmap
+  const lockscreenRef = useRef<React.ElementRef<typeof ViewShot>>(null);
+
+  // 1. Calculate today's completed practice minutes for Voice
+  const todayPracticeMinutes = useMemo(() => {
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const sessions = db.getPracticeSessions(DEFAULT_INSTRUMENT_IDS.VOICE);
+      const todaySessions = sessions.filter((s) => s.started_at.startsWith(todayStr));
+      return Math.floor(
+        todaySessions.reduce((acc, s) => acc + s.duration_seconds, 0) / 60
+      );
+    } catch (e) {
+      console.error('[LOCKSCREEN PRACTICE CALC ERROR]:', e);
+      return 0;
+    }
+  }, [refreshTrigger]);
+
+  // 2. Query 7-day rolling qualifying days (>= 5 min sessions)
+  const rollingConsistencyDays = useMemo(() => {
+    try {
+      const stats = db.getRolling7DayStats(DEFAULT_INSTRUMENT_IDS.VOICE);
+      return stats.daysPracticed;
+    } catch (e) {
+      console.error('[LOCKSCREEN ROLLING CALC ERROR]:', e);
+      return 0;
+    }
+  }, [refreshTrigger]);
+
   const activeInstrument =
     instruments.find((i) => i.instrument_id === activeInstrumentId) ||
     instruments[0] ||
     FALLBACK_INSTRUMENT;
 
+  // Render & export the lock screen HUD bitmap
+const captureLockscreenWallpaper = async () => {
+    try {
+      if (!lockscreenRef.current) return;
+
+      // 1. Snapshot the 1344x2992 off-screen canvas
+      const uri = await captureRef(lockscreenRef, {
+        format: 'png',
+        quality: 1.0,
+        width: 1344,
+        height: 2992,
+      });
+
+      console.log('[CYBER LOCKSCREEN GENERATED]:', uri);
+
+      // 2. Request permissions to write to Pixel's gallery
+      const { status } = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
+      if (status !== 'granted') {
+        console.warn('[WALLPAPER PERMISSION DENIED]: Cannot save to photo library.');
+        return;
+      }
+
+      // 3. Save snapshot to media library
+      const asset = await MediaLibrary.createAssetAsync(uri);
+
+      // 4. Organize into a dedicated 'Cantabile' album
+      const album = await MediaLibrary.getAlbumAsync('Cantabile');
+      if (!album) {
+        await MediaLibrary.createAlbumAsync('Cantabile', asset, false);
+      } else {
+        await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+      }
+
+      console.log('[WALLPAPER SAVED TO GALLERY]: Ready for Lock Screen');
+    } catch (err) {
+      console.error('[LOCKSCREEN CAPTURE ERROR]:', err);
+    }
+  };
+
   const handleDataChanged = () => {
     try {
       setInstruments(db.getInstruments());
       setRefreshTrigger((prev) => prev + 1);
+      // Give React one event tick to render updated props to the off-screen canvas before capturing
+      setTimeout(() => {
+        captureLockscreenWallpaper();
+      }, 600);
     } catch (err) {
       console.error('[REFRESH ERROR]:', err);
     }
   };
 
+  // Run reconciliation and initial lockscreen render on morning app launch
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      captureLockscreenWallpaper();
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, []);
+
+/*  test component types for debugging React Native bundler issues
+    console.log('[DEBUG COMPONENTS]:', {
+  ViewShot: typeof ViewShot,
+  CyberJuryLockscreen: typeof CyberJuryLockscreen,
+  PracticeStopwatch: typeof PracticeStopwatch,
+  RollingConsistencyCard: typeof RollingConsistencyCard,
+  PracticeLog: typeof PracticeLog,
+  AiLessonAnalyzer: typeof AiLessonAnalyzer,
+}); */
+
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]} >
+    <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" />
 
       {/* Header & Instrument Selector */}
@@ -116,16 +210,17 @@ function MainApp() {
 
       {/* Main Tab Screen Area */}
       <View style={styles.content}>
+        {/* Tab 1: Practice Stopwatch */}
         <View style={[styles.tabContainer, activeTab !== 'practice' && styles.hiddenTab]}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <PracticeStopwatch
-              key={`stopwatch-${activeInstrument.instrument_id}-${refreshTrigger}`}
               activeInstrument={activeInstrument}
               onSessionSaved={handleDataChanged}
             />
           </ScrollView>
         </View>
 
+        {/* Tab 2: Progress */}
         <View style={[styles.tabContainer, activeTab !== 'progress' && styles.hiddenTab]}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <RollingConsistencyCard
@@ -142,6 +237,7 @@ function MainApp() {
           </ScrollView>
         </View>
 
+        {/* Tab 3: Lessons */}
         <View style={[styles.tabContainer, activeTab !== 'lessons' && styles.hiddenTab]}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <AiLessonAnalyzer
@@ -153,7 +249,7 @@ function MainApp() {
         </View>
       </View>
 
-      {/* Bottom Navigation Bar with Dynamic Bottom Inset */}
+      {/* Bottom Navigation Bar */}
       <View style={[styles.navBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         <TouchableOpacity
           style={styles.navButton}
@@ -208,6 +304,22 @@ function MainApp() {
             Lessons
           </Text>
         </TouchableOpacity>
+      </View>
+
+      {/* Off-screen ViewShot container for Pixel 8 Pro Lock Screen Generation */}
+      <View
+        pointerEvents="none"
+        style={styles.offscreenContainer}
+      >
+        <ViewShot
+          ref={lockscreenRef}
+          options={{ format: 'png', quality: 1.0, width: 1344, height: 2992 }}
+        >
+          <CyberJuryLockscreen
+            todayPracticeMinutes={todayPracticeMinutes}
+            rollingConsistencyDays={rollingConsistencyDays}
+          />
+        </ViewShot>
       </View>
     </View>
   );
@@ -318,5 +430,13 @@ const styles = StyleSheet.create({
   navLabelActive: {
     color: '#a78bfa',
     fontWeight: '700',
+  },
+  offscreenContainer: {
+    position: 'absolute',
+    left: -9999,
+    top: -9999,
+    width: 1344,
+    height: 2992,
+    opacity: 0,
   },
 });

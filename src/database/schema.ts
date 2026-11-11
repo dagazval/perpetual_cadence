@@ -16,6 +16,16 @@ export interface DimInstrument {
   created_at: string;
 }
 
+export interface DimRepertoire {
+  repertoire_id: string; // UUID primary key
+  user_id: string;       // Foreign key / user attribution
+  instrument_id: string; // Foreign key referencing dim_instruments
+  title: string;
+  composer_arranger: string;
+  is_active: boolean;    // Only active pieces display on the lock screen
+  created_at: string;
+}
+
 export interface DimTag {
   tag_id: string;
   user_id: string;
@@ -167,6 +177,16 @@ public async syncPracticeSessionsFromCloud(instrumentId?: string): Promise<void>
           created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS dim_repertoire (
+          repertoire_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          instrument_id TEXT NOT NULL REFERENCES dim_instruments(instrument_id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          composer_arranger TEXT NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS dim_tags (
           tag_id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL,
@@ -268,6 +288,21 @@ public async syncPracticeSessionsFromCloud(instrumentId?: string): Promise<void>
           CURRENT_USER_ID, DEFAULT_INSTRUMENT_IDS.OBOE, nowIso,
         ]
       );
+
+      // Seed Default Repertoire for Voice Jury
+        this.db.runSync(
+          `INSERT OR IGNORE INTO dim_repertoire (
+            repertoire_id, user_id, instrument_id, title, composer_arranger, is_active, created_at
+          ) VALUES 
+            ('rep-voice-001', ?, ?, 'I Feel The Earth Move', 'Carole King', 1, ?),
+            ('rep-voice-002', ?, ?, 'Lesson 3 - Intervals of the Sixth', 'Nicola Vaccai', 1, ?),
+            ('rep-voice-003', ?, ?, 'Shenandoah', 'arr. Jay Althouse', 1, ?);`,
+          [
+            CURRENT_USER_ID, DEFAULT_INSTRUMENT_IDS.VOICE, nowIso,
+            CURRENT_USER_ID, DEFAULT_INSTRUMENT_IDS.VOICE, nowIso,
+            CURRENT_USER_ID, DEFAULT_INSTRUMENT_IDS.VOICE, nowIso,
+          ]
+        );
 
       // Seed Default Quota
       this.db.runSync(
@@ -432,6 +467,68 @@ public discardStagedTag(identifier: string, instrumentId?: string): void {
         }
       });
   }
+
+  // Dimension: Repertoire
+public getActiveRepertoire(instrumentId: string): DimRepertoire[] {
+  try {
+    const rows = this.db.getAllSync<any>(
+      `SELECT * FROM dim_repertoire 
+       WHERE instrument_id = ? AND is_active = 1 
+       ORDER BY created_at ASC;`,
+      [instrumentId]
+    );
+    return rows.map((r) => ({
+      ...r,
+      is_active: Boolean(r.is_active),
+    }));
+  } catch (err) {
+    console.error('[DB ERROR getActiveRepertoire]:', err);
+    return [];
+  }
+}
+
+public addRepertoire(piece: {
+  instrument_id: string;
+  title: string;
+  composer_arranger: string;
+  is_active?: boolean;
+}): DimRepertoire {
+  const repertoireId = `rep-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const nowIso = new Date().toISOString();
+  const isActive = piece.is_active !== undefined ? (piece.is_active ? 1 : 0) : 1;
+
+  this.db.runSync(
+    `INSERT INTO dim_repertoire (
+      repertoire_id, user_id, instrument_id, title, composer_arranger, is_active, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+    [
+      repertoireId,
+      CURRENT_USER_ID,
+      piece.instrument_id,
+      piece.title.trim(),
+      piece.composer_arranger.trim(),
+      isActive,
+      nowIso,
+    ]
+  );
+
+  return {
+    repertoire_id: repertoireId,
+    user_id: CURRENT_USER_ID,
+    instrument_id: piece.instrument_id,
+    title: piece.title.trim(),
+    composer_arranger: piece.composer_arranger.trim(),
+    is_active: Boolean(isActive),
+    created_at: nowIso,
+  };
+}
+
+public setRepertoireActiveStatus(repertoireId: string, isActive: boolean): void {
+  this.db.runSync(
+    `UPDATE dim_repertoire SET is_active = ? WHERE repertoire_id = ?;`,
+    [isActive ? 1 : 0, repertoireId]
+  );
+}
 
   // Core Fact: Practice Sessions
 public recordSession(data: {

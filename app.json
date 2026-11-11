@@ -4,7 +4,7 @@
     "slug": "Perpetuum",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/icon.rpng",
     "scheme": "perpetuum",
     "userInterfaceStyle": "automatic",
     "android": {
@@ -19,7 +19,14 @@
     "plugins": [
       "expo-sqlite",
       "expo-router",
-      "react-native-compressor"
+      "react-native-compressor",
+      ["expo-media-library",
+        {
+          "photosPermission": "Allow Cantabile to save lock screen wallpapers.",
+          "savePhotosPermission": "Allow Cantabile to save lock screen wallpapers.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false
