@@ -4,7 +4,7 @@
     "slug": "Perpetuum",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.rpng",
+    "icon": "./assets/images/icon.png",
     "scheme": "perpetuum",
     "userInterfaceStyle": "automatic",
     "android": {
