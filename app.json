@@ -46,7 +46,7 @@
       "enabled": false
     },
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "1.0.0"
     }
   }
 }
