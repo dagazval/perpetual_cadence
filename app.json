@@ -44,9 +44,6 @@
     "owner": "nomikkh",
     "updates": {
       "enabled": false
-    },
-    "runtimeVersion": {
-      "policy": "1.0.0"
     }
   }
 }
