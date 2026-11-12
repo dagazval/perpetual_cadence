@@ -1,18 +1,10 @@
 import {
-  addAssetsToAlbumAsync,
-  createAlbumAsync,
-  createAssetAsync,
-  getAlbumAsync,
-  getPermissionsAsync,
-  requestPermissionsAsync,
-} from 'expo-media-library/legacy';
-import {
   BarChart2,
   BookOpen,
   Music,
   Timer,
 } from 'lucide-react-native';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ScrollView,
@@ -22,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import ManageWallpaper, { TYPE } from 'react-native-manage-wallpaper';
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
@@ -65,8 +58,8 @@ function MainApp() {
   );
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
-  // Hidden off-screen ViewShot reference for generating wallpaper bitmap
-  const lockscreenRef = useRef<React.ElementRef<typeof ViewShot>>(null);
+  // Off-screen ViewShot reference for generating the 1344x2992 wallpaper bitmap
+  const lockscreenRef = useRef<any>(null);
 
   // 1. Calculate today's completed practice minutes for Voice
   const todayPracticeMinutes = useMemo(() => {
@@ -99,84 +92,54 @@ function MainApp() {
     instruments[0] ||
     FALLBACK_INSTRUMENT;
 
-  // Render & export the lock screen HUD bitmap
-const captureLockscreenWallpaper = async () => {
+  // Capture off-screen HUD and apply directly to Android Lock Screen
+  const captureLockscreenWallpaper = async (showAlert = false) => {
     try {
       if (!lockscreenRef.current) {
         console.warn('[WALLPAPER] Ref is null, canvas not ready.');
         return;
       }
 
-      console.log('[WALLPAPER] Capturing canvas...');
       const uri = await captureRef(lockscreenRef, {
         format: 'png',
         quality: 1.0,
       });
 
-      console.log('[CYBER LOCKSCREEN GENERATED]:', uri);
-
-      // 1. Verify photo-scoped permissions
-      const { status } = await getPermissionsAsync(false, ['photo']);
-      if (status !== 'granted') {
-        const req = await requestPermissionsAsync(false, ['photo']);
-        if (req.status !== 'granted') {
-          Alert.alert('Permission Needed', 'Cannot export wallpaper without photo permissions.');
-          return;
-        }
-      }
-
-      // 2. Create the MediaLibrary Asset
-      const asset = await createAssetAsync(uri);
-
-      // 3. Look up or create the 'Cantabile' Album
-      const album = await getAlbumAsync('Cantabile');
-      if (!album) {
-        await createAlbumAsync('Cantabile', asset, true);
-      } else {
-        await addAssetsToAlbumAsync([asset], album, true);
-      }
-
-      console.log('[WALLPAPER SAVED TO GALLERY]: Ready for Lock Screen');
-      Alert.alert(
-        'Lock Screen Generated!',
-        'The Cyberpunk jury wallpaper has been saved to your Photos in the "Cantabile" album.'
+      ManageWallpaper.setWallpaper(
+        { uri },
+        (res: any) => {
+          console.log('[LOCKSCREEN APPLIED]:', res);
+          if (showAlert) {
+            Alert.alert(
+              'Lock Screen Updated!',
+              'Your Pixel lock screen wallpaper has been updated.'
+            );
+          }
+        },
+        TYPE.LOCK
       );
     } catch (err: any) {
       console.error('[LOCKSCREEN CAPTURE ERROR]:', err);
-      Alert.alert('Capture Error', err?.message || String(err));
+      if (showAlert) {
+        Alert.alert('Lockscreen Error', err?.message || String(err));
+      }
     }
   };
 
+  // Triggered when a qualifying practice session is saved ("Stop Practice") or tags update
   const handleDataChanged = () => {
     try {
       setInstruments(db.getInstruments());
       setRefreshTrigger((prev) => prev + 1);
-      // Give React one event tick to render updated props to the off-screen canvas before capturing
+
+      // Give React one tick to render updated SQLite stats to the off-screen HUD
       setTimeout(() => {
-        captureLockscreenWallpaper();
+        captureLockscreenWallpaper(false);
       }, 600);
     } catch (err) {
       console.error('[REFRESH ERROR]:', err);
     }
   };
-
-  // Run reconciliation and initial lockscreen render on morning app launch
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      captureLockscreenWallpaper();
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, []);
-
-/*  test component types for debugging React Native bundler issues
-    console.log('[DEBUG COMPONENTS]:', {
-  ViewShot: typeof ViewShot,
-  CyberJuryLockscreen: typeof CyberJuryLockscreen,
-  PracticeStopwatch: typeof PracticeStopwatch,
-  RollingConsistencyCard: typeof RollingConsistencyCard,
-  PracticeLog: typeof PracticeLog,
-  AiLessonAnalyzer: typeof AiLessonAnalyzer,
-}); */
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -184,7 +147,7 @@ const captureLockscreenWallpaper = async () => {
 
       {/* Header & Instrument Selector */}
       <View style={styles.header}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <View style={styles.headerTopRow}>
           <View style={styles.brandingRow}>
             <View style={styles.appIconCircle}>
               <Music size={16} color="#ffffff" />
@@ -195,25 +158,13 @@ const captureLockscreenWallpaper = async () => {
             </View>
           </View>
 
-          {/* Quick Lock Screen Sync Button */}
           <TouchableOpacity
-            onPress={captureLockscreenWallpaper}
-            style={{
-              paddingVertical: 6,
-              paddingHorizontal: 12,
-              borderRadius: 8,
-              backgroundColor: '#4c1d95',
-              borderWidth: 1,
-              borderColor: '#7c3aed',
-            }}
+            onPress={() => captureLockscreenWallpaper(true)}
+            style={styles.syncButton}
           >
-            <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: 'bold' }}>
-              ⚡ Sync Lockscreen
-            </Text>
+            <Text style={styles.syncButtonText}>⚡ Sync Lockscreen</Text>
           </TouchableOpacity>
         </View>
-
-        {/* ... instrument selector below remains intact ... */}
 
         <ScrollView
           horizontal
@@ -345,16 +296,13 @@ const captureLockscreenWallpaper = async () => {
       </View>
 
       {/* Off-screen ViewShot container for Pixel 8 Pro Lock Screen Generation */}
-      <View
-        pointerEvents="none"
-        style={styles.offscreenContainer}
-      >
+      <View pointerEvents="none" style={styles.offscreenContainer}>
         <ViewShot
           ref={lockscreenRef}
           options={{ format: 'png', quality: 1.0, width: 1344, height: 2992 }}
         >
           <CyberJuryLockscreen
-            todayPracticedMinutes={todayPracticeMinutes}
+            todayPracticeMinutes={todayPracticeMinutes}
             rollingConsistencyDays={rollingConsistencyDays}
           />
         </ViewShot>
@@ -383,6 +331,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#251b3d',
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   brandingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -404,6 +357,19 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 12,
     color: '#9ca3af',
+  },
+  syncButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#4c1d95',
+    borderWidth: 1,
+    borderColor: '#7c3aed',
+  },
+  syncButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   instrumentBar: {
     marginTop: 14,
@@ -469,12 +435,12 @@ const styles = StyleSheet.create({
     color: '#a78bfa',
     fontWeight: '700',
   },
- offscreenContainer: {
+  offscreenContainer: {
     position: 'absolute',
     left: -9999,
     top: 0,
     width: 1344,
     height: 2992,
-    opacity: 1, // Keep opacity 1 so Android renders the draw commands off-screen
+    opacity: 1,
   },
 });
