@@ -174,15 +174,16 @@ const styles = StyleSheet.create({
     height: 2992,
     backgroundColor: '#0f0a1e',
   },
-  hudOverlay: {
+ hudOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 10, 30, 0.42)',
     paddingHorizontal: 68,
-    paddingBottom: 180,
-    justifyContent: 'space-between',
+    paddingBottom: 820, // Keeps all HUD cards above the Pixel 8 Pro fingerprint ring
+    justifyContent: 'flex-start',
+    gap: 24, // Tight, clean spacing between the 3 cards
   },
   topVoidSpacer: {
-    height: '38%',
+    height: '33%', // Sits right beneath the Pixel lock screen clock & date
   },
   hudCard: {
     backgroundColor: 'rgba(15, 10, 30, 0.78)',
