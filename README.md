@@ -1,5 +1,5 @@
 <div align="center">
-<img alt="PCBanner" src="https://github.com/dagazval/perpetual_cadence/blob/main/assets/images/icon.png" />
+<img width=500 height=500 alt="PCBanner" src="https://github.com/dagazval/perpetual_cadence/blob/main/assets/images/icon.png" />
 </div>
 
 
