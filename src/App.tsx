@@ -7,6 +7,7 @@ import {
 } from 'lucide-react-native';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -94,39 +95,48 @@ function MainApp() {
   // Render & export the lock screen HUD bitmap
 const captureLockscreenWallpaper = async () => {
     try {
-      if (!lockscreenRef.current) return;
+      if (!lockscreenRef.current) {
+        console.warn('[WALLPAPER] Ref is null, canvas not ready.');
+        return;
+      }
 
-      // 1. Snapshot the 1344x2992 off-screen canvas
+      console.log('[WALLPAPER] Capturing canvas...');
       const uri = await captureRef(lockscreenRef, {
         format: 'png',
         quality: 1.0,
-        width: 1344,
-        height: 2992,
       });
 
       console.log('[CYBER LOCKSCREEN GENERATED]:', uri);
 
-      // 2. Request permissions to write to Pixel's gallery
-      const { status } = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
+      // Check permission
+      const { status } = await MediaLibrary.getPermissionsAsync();
       if (status !== 'granted') {
-        console.warn('[WALLPAPER PERMISSION DENIED]: Cannot save to photo library.');
-        return;
+        const req = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
+        if (req.status !== 'granted') {
+          Alert.alert('Permission Needed', 'Cannot export wallpaper without photo permissions.');
+          return;
+        }
       }
 
-      // 3. Save snapshot to media library
+      // Create primary asset in Pictures/
       const asset = await MediaLibrary.createAssetAsync(uri);
 
-      // 4. Organize into a dedicated 'Cantabile' album
-      const album = await MediaLibrary.getAlbumAsync('Cantabile');
+      // Save/copy into the Cantabile album
+      let album = await MediaLibrary.getAlbumAsync('Cantabile');
       if (!album) {
-        await MediaLibrary.createAlbumAsync('Cantabile', asset, false);
+        album = await MediaLibrary.createAlbumAsync('Cantabile', asset, true);
       } else {
-        await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+        await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
       }
 
       console.log('[WALLPAPER SAVED TO GALLERY]: Ready for Lock Screen');
-    } catch (err) {
+      Alert.alert(
+        'Lock Screen Generated!',
+        'The Cyberpunk jury wallpaper has been saved to your Photos in the "Cantabile" album.'
+      );
+    } catch (err: any) {
       console.error('[LOCKSCREEN CAPTURE ERROR]:', err);
+      Alert.alert('Capture Error', err?.message || String(err));
     }
   };
 
@@ -167,15 +177,36 @@ const captureLockscreenWallpaper = async () => {
 
       {/* Header & Instrument Selector */}
       <View style={styles.header}>
-        <View style={styles.brandingRow}>
-          <View style={styles.appIconCircle}>
-            <Music size={16} color="#ffffff" />
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View style={styles.brandingRow}>
+            <View style={styles.appIconCircle}>
+              <Music size={16} color="#ffffff" />
+            </View>
+            <View>
+              <Text style={styles.headerTitle}>Cantabile</Text>
+              <Text style={styles.headerSubtitle}>Perpetual Cadence Practice</Text>
+            </View>
           </View>
-          <View>
-            <Text style={styles.headerTitle}>Cantabile</Text>
-            <Text style={styles.headerSubtitle}>Perpetual Cadence Practice</Text>
-          </View>
+
+          {/* Quick Lock Screen Sync Button */}
+          <TouchableOpacity
+            onPress={captureLockscreenWallpaper}
+            style={{
+              paddingVertical: 6,
+              paddingHorizontal: 12,
+              borderRadius: 8,
+              backgroundColor: '#4c1d95',
+              borderWidth: 1,
+              borderColor: '#7c3aed',
+            }}
+          >
+            <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: 'bold' }}>
+              ⚡ Sync Lockscreen
+            </Text>
+          </TouchableOpacity>
         </View>
+
+        {/* ... instrument selector below remains intact ... */}
 
         <ScrollView
           horizontal
@@ -431,12 +462,12 @@ const styles = StyleSheet.create({
     color: '#a78bfa',
     fontWeight: '700',
   },
-  offscreenContainer: {
+ offscreenContainer: {
     position: 'absolute',
     left: -9999,
-    top: -9999,
+    top: 0,
     width: 1344,
     height: 2992,
-    opacity: 0,
+    opacity: 1, // Keep opacity 1 so Android renders the draw commands off-screen
   },
 });
