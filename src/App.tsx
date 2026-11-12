@@ -1,4 +1,11 @@
-import * as MediaLibrary from 'expo-media-library';
+import {
+  addAssetsToAlbumAsync,
+  createAlbumAsync,
+  createAssetAsync,
+  getAlbumAsync,
+  getPermissionsAsync,
+  requestPermissionsAsync,
+} from 'expo-media-library';
 import {
   BarChart2,
   BookOpen,
@@ -108,25 +115,25 @@ const captureLockscreenWallpaper = async () => {
 
       console.log('[CYBER LOCKSCREEN GENERATED]:', uri);
 
-      // Check permission
-      const { status } = await MediaLibrary.getPermissionsAsync();
+      // 1. Verify photo-scoped permissions
+      const { status } = await getPermissionsAsync(false, ['photo']);
       if (status !== 'granted') {
-        const req = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
+        const req = await requestPermissionsAsync(false, ['photo']);
         if (req.status !== 'granted') {
           Alert.alert('Permission Needed', 'Cannot export wallpaper without photo permissions.');
           return;
         }
       }
 
-      // Create primary asset in Pictures/
-      const asset = await MediaLibrary.createAssetAsync(uri);
+      // 2. Create the MediaLibrary Asset in Pictures/
+      const asset = await createAssetAsync(uri);
 
-      // Save/copy into the Cantabile album
-      let album = await MediaLibrary.getAlbumAsync('Cantabile');
+      // 3. Look up or create the 'Cantabile' Album
+      const album = await getAlbumAsync('Cantabile');
       if (!album) {
-        album = await MediaLibrary.createAlbumAsync('Cantabile', asset, true);
+        await createAlbumAsync('Cantabile', asset, true);
       } else {
-        await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
+        await addAssetsToAlbumAsync([asset], album, true);
       }
 
       console.log('[WALLPAPER SAVED TO GALLERY]: Ready for Lock Screen');
