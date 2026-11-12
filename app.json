@@ -1,49 +1,26 @@
 {
   "expo": {
-    "name": "Perpetuum",
-    "slug": "Perpetuum",
+    "name": "Cantabile",
+    "slug": "perpetual_cadence",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "perpetuum",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f0a1e"
+    },
     "android": {
+      "package": "com.nomikkh.cantabile",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE"
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#0f0a1e"
       },
-      "package": "com.nomikkh.appPerpetuum"
-    },
-    "web": {
-      "output": "single"
-    },
-    "plugins": [
-      "expo-sqlite",
-      "expo-router",
-      "react-native-compressor",
-      ["expo-media-library",
-        {
-          "photosPermission": "Allow Cantabile to save lock screen wallpapers.",
-          "savePhotosPermission": "Allow Cantabile to save lock screen wallpapers.",
-          "isAccessMediaLocationEnabled": false
-        }
+      "permissions": [
+        "android.permission.SET_WALLPAPER"
       ]
-    ],
-    "experiments": {
-      "typedRoutes": false
     },
-    "extra": {
-      "router": {
-        "asyncRoutes": {
-          "web": true
-        }
-      },
-      "eas": {
-        "projectId": "30ebc57c-987a-437c-9901-33b65ff013f8"
-      }
-    },
-    "owner": "nomikkh",
-    "updates": {
-      "enabled": false
-    }
+    "plugins": []
   }
 }

@@ -14,13 +14,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import ManageWallpaper, { TYPE } from 'react-native-manage-wallpaper';
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 
+import { setLockscreenWallpaper } from '@/modules/lockscreen-wallpaper';
 import { AiLessonAnalyzer } from './components/AiLessonAnalyzer';
 import { CyberJuryLockscreen } from './components/CyberJuryLockscreen';
 import { PracticeLog } from './components/PracticeLog';
@@ -105,19 +105,15 @@ function MainApp() {
         quality: 1.0,
       });
 
-      ManageWallpaper.setWallpaper(
-        { uri },
-        (res: any) => {
-          console.log('[LOCKSCREEN APPLIED]:', res);
-          if (showAlert) {
-            Alert.alert(
-              'Lock Screen Updated!',
-              'Your Pixel lock screen wallpaper has been updated.'
-            );
-          }
-        },
-        TYPE.LOCK
-      );
+      await setLockscreenWallpaper(uri);
+      console.log('[LOCKSCREEN APPLIED]: Updated Pixel lock screen directly.');
+
+      if (showAlert) {
+        Alert.alert(
+          'Lock Screen Updated!',
+          'Your Pixel lock screen wallpaper has been updated.'
+        );
+      }
     } catch (err: any) {
       console.error('[LOCKSCREEN CAPTURE ERROR]:', err);
       if (showAlert) {
