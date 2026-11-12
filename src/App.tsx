@@ -1,8 +1,11 @@
 import {
+  addAssetsToAlbumAsync,
+  createAlbumAsync,
+  createAssetAsync,
+  getAlbumAsync,
   getPermissionsAsync,
   requestPermissionsAsync,
-  saveToLibraryAsync,
-} from 'expo-media-library';
+} from 'expo-media-library/legacy';
 import {
   BarChart2,
   BookOpen,
@@ -122,19 +125,27 @@ const captureLockscreenWallpaper = async () => {
         }
       }
 
-// 2. Save directly to the Pixel's primary Pictures directory
-  await saveToLibraryAsync(uri);
+      // 2. Create the MediaLibrary Asset
+      const asset = await createAssetAsync(uri);
 
-  console.log('[WALLPAPER SAVED TO GALLERY]: Ready for Lock Screen');
-  Alert.alert(
-    'Lock Screen Generated!',
-    'The Cyberpunk jury wallpaper has been saved to your Photos.'
-  );
-      } catch (err: any) {
-        console.error('[LOCKSCREEN CAPTURE ERROR]:', err);
-        Alert.alert('Capture Error', err?.message || String(err));
+      // 3. Look up or create the 'Cantabile' Album
+      const album = await getAlbumAsync('Cantabile');
+      if (!album) {
+        await createAlbumAsync('Cantabile', asset, true);
+      } else {
+        await addAssetsToAlbumAsync([asset], album, true);
       }
-    };
+
+      console.log('[WALLPAPER SAVED TO GALLERY]: Ready for Lock Screen');
+      Alert.alert(
+        'Lock Screen Generated!',
+        'The Cyberpunk jury wallpaper has been saved to your Photos in the "Cantabile" album.'
+      );
+    } catch (err: any) {
+      console.error('[LOCKSCREEN CAPTURE ERROR]:', err);
+      Alert.alert('Capture Error', err?.message || String(err));
+    }
+  };
 
   const handleDataChanged = () => {
     try {
