@@ -21,6 +21,12 @@
         "android.permission.SET_WALLPAPER"
       ]
     },
-    "plugins": []
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "fbc0deeb-d74c-4dbf-8a0e-be1781b394c2"
+      }
+    },
+    "owner": "nomikkh"
   }
 }
