@@ -1,438 +1,328 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { db, DEFAULT_INSTRUMENT_IDS, DimRepertoire } from '../database/schema';
+import React, { useMemo } from 'react';
+import { ImageBackground, StyleSheet, Text, View } from 'react-native';
 
-interface CyberJuryLockscreenProps {
-  todayPracticeMinutes: number; // calculated from fact_practice_sessions
-  rollingConsistencyDays: number; // qualifying days count (>= 5 min)
+export interface RepertoirePiece {
+  id: string;
+  title: string;
+  subtitle?: string;
 }
 
+export interface CyberJuryLockscreenProps {
+  juryDateIso?: string;
+  targetDailyMinutes?: number;
+  todayPracticedMinutes?: number;
+  rollingConsistencyDays?: number;
+  rolling7DaysPracticed?: boolean[];
+  repertoire?: RepertoirePiece[];
+}
+
+const DEFAULT_REPERTOIRE: RepertoirePiece[] = [
+  { id: '1', title: 'I Feel The Earth Move', subtitle: 'Carole King' },
+  { id: '2', title: 'Lesson 3 - Intervals of the Sixth', subtitle: 'Vaccai Method' },
+  { id: '3', title: 'Shenandoah', subtitle: 'American Folk / Arr. Dougherty' },
+];
+
 export const CyberJuryLockscreen: React.FC<CyberJuryLockscreenProps> = ({
-  todayPracticeMinutes,
+  juryDateIso = '2026-12-05T09:00:00',
+  targetDailyMinutes = 45,
+  todayPracticedMinutes = 30,
   rollingConsistencyDays,
+  rolling7DaysPracticed,
+  repertoire = DEFAULT_REPERTOIRE,
 }) => {
-  // Query active repertoire for Voice from SQLite
-  const activeRepertoire: DimRepertoire[] = db.getActiveRepertoire(
-    DEFAULT_INSTRUMENT_IDS.VOICE
-  );
+  const countdown = useMemo(() => {
+    const target = new Date(juryDateIso).getTime();
+    const now = Date.now();
+    const diffMs = Math.max(0, target - now);
 
+    const totalHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
 
-  // Jury date targets
-  const juryTarget = new Date('2026-12-05T10:32:00');
-  const now = new Date();
+    return { days, hours };
+  }, [juryDateIso]);
 
-  // Day-of check
-  const isJuryDay =
-    now.getFullYear() === 2026 &&
-    now.getMonth() === 11 && // Dec (0-indexed)
-    now.getDate() === 5;
+  const resolved7Days = useMemo(() => {
+    if (rolling7DaysPracticed && rolling7DaysPracticed.length > 0) {
+      return rolling7DaysPracticed;
+    }
+    if (typeof rollingConsistencyDays === 'number') {
+      const count = Math.max(0, Math.min(7, Math.round(rollingConsistencyDays)));
+      return Array.from({ length: 7 }, (_, i) => i >= 7 - count);
+    }
+    return [true, false, true, true, false, true, true];
+  }, [rollingConsistencyDays, rolling7DaysPracticed]);
 
-  const msRemaining = juryTarget.getTime() - now.getTime();
-  const daysRemaining = Math.max(0, Math.ceil(msRemaining / (1000 * 60 * 60 * 24)));
-
-  // Gauge calculations (Option A: Segmented Cyber Bar with Overdrive)
-  const targetMinutes = 20;
-  const isOverdrive = todayPracticeMinutes > targetMinutes;
-  const progressPercent = Math.min(
+  const dailyPercent = Math.min(
     100,
-    Math.round((todayPracticeMinutes / targetMinutes) * 100)
+    Math.round((todayPracticedMinutes / Math.max(1, targetDailyMinutes)) * 100)
   );
+
+  const dayLabels = ['D-6', 'D-5', 'D-4', 'D-3', 'D-2', 'YST', 'TDY'];
 
   return (
-    <View style={styles.canvasContainer}>
-      {/* Upper 38% reserved for native Android system clock & notifications */}
-      <View style={styles.systemReservationSpacer} />
+    <ImageBackground
+      source={require('../../assets/images/cyber_bg.png')}
+      style={styles.canvas}
+      resizeMode="cover"
+    >
+      {/* Subtle dark tint so neon HUD text and progress bars remain razor-sharp */}
+      <View style={styles.hudOverlay}>
+        {/* Top 38% Void Spacer: Keeps Pixel 8 Pro clock, date, weather & notifications unobstructed */}
+        <View style={styles.topVoidSpacer} />
 
-      {/* Main HUD Body */}
-      <View style={styles.hudBody}>
-        {/* Status Line */}
-        <View style={styles.telemetryHeader}>
-          <Text style={styles.telemetryText}>
-            [ • CANTABILE HUD // VOICE STUDIO ]
-          </Text>
-          <Text style={styles.telemetrySub}>
-            SYS: OK • SQLITE PERSISTED
-          </Text>
-        </View>
+        {/* HUD Section 1: Jury Countdown Module */}
+        <View style={styles.hudCard}>
+          <View style={styles.hudHeaderRow}>
+            <Text style={styles.hudTag}>// JURY TELEMETRY</Text>
+            <Text style={styles.hudTargetDate}>TARGET: DEC 05 2026</Text>
+          </View>
 
-        {/* Hero Countdown / Day-of Telemetry */}
-        <View style={styles.heroCard}>
-          {isJuryDay ? (
-            <View style={styles.dayOfContainer}>
-              <Text style={styles.dayOfAlert}>[ ! ] JURY DAY PROTOCOL ACTIVE</Text>
-              <View style={styles.scheduleRow}>
-                <Text style={styles.scheduleTime}>09:00 AM</Text>
-                <Text style={styles.scheduleEvent}>Warm Up at Home (30m)</Text>
-              </View>
-              <View style={styles.scheduleRow}>
-                <Text style={styles.scheduleTime}>09:30 AM</Text>
-                <Text style={styles.scheduleEvent}>Bike to Campus (30m)</Text>
-              </View>
-              <View style={styles.scheduleRow}>
-                <Text style={styles.scheduleTime}>10:00 AM</Text>
-                <Text style={styles.scheduleEvent}>Arrival & Check-In</Text>
-              </View>
-              <View style={[styles.scheduleRow, styles.juryHighlightRow]}>
-                <Text style={styles.juryTime}>10:32 AM</Text>
-                <Text style={styles.juryText}>VOICE JURY EVALUATION</Text>
-              </View>
-            </View>
-          ) : (
-            <View style={styles.countdownContainer}>
-              <Text style={styles.countdownNumber}>
-                {daysRemaining} <Text style={styles.countdownDaysLabel}>DAYS</Text>
+          <View style={styles.countdownRow}>
+            <View style={styles.timeBlock}>
+              <Text style={styles.countdownValue}>
+                {String(countdown.days).padStart(2, '0')}
               </Text>
-              <Text style={styles.countdownSubtitle}>
-                UNTIL VOCAL JURY // DEC 05, 2026
-              </Text>
+              <Text style={styles.countdownUnit}>DAYS</Text>
             </View>
-          )}
+
+            <Text style={styles.countdownSeparator}>:</Text>
+
+            <View style={styles.timeBlock}>
+              <Text style={styles.countdownValue}>
+                {String(countdown.hours).padStart(2, '0')}
+              </Text>
+              <Text style={styles.countdownUnit}>HRS</Text>
+            </View>
+          </View>
         </View>
 
-        {/* Milestone Indicator */}
-        <View style={styles.milestoneBadge}>
-          <Text style={styles.milestoneLabel}>NEXT TARGET</Text>
-          <Text style={styles.milestoneDetail}>
-            Nov 16 • 9:30 AM — Pianist Rehearsal #1 (Full Run)
-          </Text>
-        </View>
-
-        {/* Daily Discipline Gauge (Option A: Segmented Cyber Bar) */}
-        <View style={styles.gaugeContainer}>
-          <View style={styles.gaugeHeader}>
-            <Text style={styles.gaugeTitle}>DAILY DISCIPLINE GAUGES</Text>
-            <Text
-              style={[
-                styles.gaugeStats,
-                isOverdrive && styles.overdriveText,
-              ]}
-            >
-              {todayPracticeMinutes} / {targetMinutes} MIN{' '}
-              {isOverdrive
-                ? `• ${Math.round((todayPracticeMinutes / targetMinutes) * 100)}% OVERDRIVE`
-                : `• ${progressPercent}%`}
+        {/* HUD Section 2: Daily Practice Gauge & 7-Day Rolling Cadence */}
+        <View style={styles.hudCard}>
+          <View style={styles.hudHeaderRow}>
+            <Text style={styles.hudTag}>// DAILY CADENCE</Text>
+            <Text style={styles.hudMetricText}>
+              {todayPracticedMinutes} / {targetDailyMinutes} MIN ({dailyPercent}%)
             </Text>
           </View>
 
-          {/* Segmented Bar Track */}
-          <View style={styles.barTrack}>
-            <View
-              style={[
-                styles.barFill,
-                { width: `${Math.min(100, progressPercent)}%` },
-                isOverdrive && styles.barFillOverdrive,
-              ]}
-            />
+          {/* Neon Progress Track */}
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${dailyPercent}%` }]} />
           </View>
 
-          {/* 7-Day Rolling Consistency (Qualifying >= 5 mins) */}
-          <View style={styles.consistencyRow}>
-            <Text style={styles.consistencyLabel}>7-DAY ROLLING</Text>
-            <View style={styles.dotsContainer}>
-              {[...Array(7)].map((_, i) => (
+          {/* 7-Day Rolling Dots */}
+          <View style={styles.rollingRow}>
+            {resolved7Days.slice(0, 7).map((practiced, idx) => (
+              <View key={idx} style={styles.rollingCol}>
                 <View
-                  key={`dot-${i}`}
                   style={[
-                    styles.dot,
-                    i < rollingConsistencyDays && styles.dotFilled,
+                    styles.rollingDot,
+                    practiced ? styles.rollingDotActive : styles.rollingDotInactive,
                   ]}
                 />
-              ))}
-            </View>
-            <Text style={styles.consistencyCount}>
-              ({rollingConsistencyDays}/4 Target)
-            </Text>
+                <Text
+                  style={[
+                    styles.rollingLabel,
+                    idx === 6 && styles.rollingLabelToday,
+                  ]}
+                >
+                  {dayLabels[idx] || ''}
+                </Text>
+              </View>
+            ))}
           </View>
         </View>
 
-        {/* Active Repertoire Matrix */}
-        <View style={styles.repertoireContainer}>
-          <Text style={styles.repertoireHeader}>REPERTOIRE MATRIX // ACTIVE</Text>
-          {activeRepertoire.map((piece) => (
-            <View key={piece.repertoire_id} style={styles.repertoireRow}>
-              <View style={styles.pieceTitleCol}>
-                <Text style={styles.pieceGlyph}>[♫]</Text>
-                <Text style={styles.pieceTitle} numberOfLines={1}>
+        {/* HUD Section 3: Active Repertoire Matrix */}
+        <View style={styles.hudCard}>
+          <View style={styles.hudHeaderRow}>
+            <Text style={styles.hudTag}>// ACTIVE REPERTOIRE</Text>
+            <Text style={styles.hudMetricText}>VOICE</Text>
+          </View>
+
+          {repertoire.slice(0, 3).map((piece, index) => (
+            <View
+              key={piece.id}
+              style={[
+                styles.repertoireRow,
+                index < repertoire.length - 1 && styles.repertoireDivider,
+              ]}
+            >
+              <Text style={styles.repertoireIndex}>0{index + 1}</Text>
+              <View style={styles.repertoireTextWrap}>
+                <Text style={styles.repertoireTitle} numberOfLines={1}>
                   {piece.title}
                 </Text>
-              </View>
-              <View style={styles.focusCol}>
-                <Text style={styles.focusBadge}>Focus: Memorization</Text>
+                {piece.subtitle ? (
+                  <Text style={styles.repertoireSubtitle} numberOfLines={1}>
+                    {piece.subtitle}
+                  </Text>
+                ) : null}
               </View>
             </View>
           ))}
         </View>
       </View>
-    </View>
+    </ImageBackground>
   );
 };
 
 const styles = StyleSheet.create({
-  canvasContainer: {
+  canvas: {
     width: 1344,
     height: 2992,
     backgroundColor: '#0f0a1e',
-    paddingHorizontal: 72,
+  },
+  hudOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 10, 30, 0.42)',
+    paddingHorizontal: 68,
+    paddingBottom: 180,
     justifyContent: 'space-between',
   },
-  systemReservationSpacer: {
-    height: 1140, // Top ~38% reserved for Pixel 8 Pro system lock elements
-    width: '100%',
+  topVoidSpacer: {
+    height: '38%',
   },
-  hudBody: {
-    flex: 1,
-    paddingBottom: 96,
-    justifyContent: 'space-around',
+  hudCard: {
+    backgroundColor: 'rgba(15, 10, 30, 0.78)',
+    borderWidth: 2,
+    borderColor: 'rgba(124, 58, 237, 0.75)',
+    borderRadius: 28,
+    paddingVertical: 32,
+    paddingHorizontal: 38,
   },
-  telemetryHeader: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#2e1b4d',
-    paddingBottom: 16,
+  hudHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 18,
   },
-  telemetryText: {
-    color: '#a78bfa',
-    fontSize: 24,
-    fontFamily: 'monospace',
+  hudTag: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#22d3ee',
     letterSpacing: 2,
-    fontWeight: '700',
   },
-  telemetrySub: {
-    color: '#6b7280',
+  hudTargetDate: {
     fontSize: 20,
-    fontFamily: 'monospace',
+    fontWeight: '700',
+    color: '#c4b5fd',
+    letterSpacing: 1.5,
   },
-  heroCard: {
-    backgroundColor: '#170e30',
-    borderRadius: 24,
-    borderWidth: 3,
-    borderColor: '#7c3aed',
-    padding: 40,
+  hudMetricText: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#e9d5ff',
+    letterSpacing: 1,
+  },
+  countdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 28,
+    paddingVertical: 6,
+  },
+  timeBlock: {
     alignItems: 'center',
   },
-  countdownContainer: {
-    alignItems: 'center',
-  },
-  countdownNumber: {
+  countdownValue: {
     fontSize: 108,
     fontWeight: '900',
-    color: '#06b6d4', // Cyan neon
-    fontFamily: 'monospace',
-    letterSpacing: 6,
+    color: '#ffffff',
+    letterSpacing: 4,
+    fontVariant: ['tabular-nums'],
   },
-  countdownDaysLabel: {
-    fontSize: 48,
-    color: '#ec4899', // Magenta neon
-  },
-  countdownSubtitle: {
-    color: '#c4b5fd',
-    fontSize: 28,
-    marginTop: 12,
+  countdownUnit: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#a78bfa',
     letterSpacing: 3,
-    fontWeight: '600',
-    fontFamily: 'monospace',
+    marginTop: 4,
   },
-  dayOfContainer: {
-    width: '100%',
-  },
-  dayOfAlert: {
-    color: '#ec4899',
-    fontSize: 32,
-    fontWeight: '900',
-    textAlign: 'center',
-    marginBottom: 24,
-    letterSpacing: 2,
-    fontFamily: 'monospace',
-  },
-  scheduleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2b1b46',
-  },
-  juryHighlightRow: {
-    borderBottomWidth: 0,
-    marginTop: 10,
-    backgroundColor: 'rgba(236, 72, 153, 0.15)',
-    paddingHorizontal: 16,
-    borderRadius: 12,
-  },
-  scheduleTime: {
-    color: '#06b6d4',
-    fontSize: 28,
-    fontWeight: '700',
-    fontFamily: 'monospace',
-  },
-  scheduleEvent: {
-    color: '#e2e8f0',
-    fontSize: 28,
-    fontWeight: '500',
-  },
-  juryTime: {
-    color: '#ec4899',
-    fontSize: 32,
-    fontWeight: '900',
-    fontFamily: 'monospace',
-  },
-  juryText: {
-    color: '#f43f5e',
-    fontSize: 32,
-    fontWeight: '900',
-  },
-  milestoneBadge: {
-    backgroundColor: '#1f1338',
-    borderRadius: 16,
-    padding: 24,
-    borderLeftWidth: 8,
-    borderLeftColor: '#06b6d4',
-  },
-  milestoneLabel: {
-    color: '#06b6d4',
-    fontSize: 20,
+  countdownSeparator: {
+    fontSize: 84,
     fontWeight: '800',
-    letterSpacing: 2,
-    fontFamily: 'monospace',
+    color: '#22d3ee',
+    marginBottom: 28,
   },
-  milestoneDetail: {
-    color: '#f1f5f9',
-    fontSize: 28,
-    fontWeight: '600',
-    marginTop: 6,
-  },
-  gaugeContainer: {
-    backgroundColor: '#170e30',
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#3b2562',
-    padding: 32,
-  },
-  gaugeHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  gaugeTitle: {
-    color: '#a78bfa',
-    fontSize: 22,
-    fontWeight: '700',
-    letterSpacing: 2,
-    fontFamily: 'monospace',
-  },
-  gaugeStats: {
-    color: '#38bdf8',
-    fontSize: 24,
-    fontWeight: '800',
-    fontFamily: 'monospace',
-  },
-  overdriveText: {
-    color: '#ec4899',
-  },
-  barTrack: {
-    height: 36,
-    backgroundColor: '#0c0717',
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#4c2882',
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: '100%',
-    backgroundColor: '#7c3aed',
-  },
-  barFillOverdrive: {
-    backgroundColor: '#ec4899',
-  },
-  consistencyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 24,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#2a1a45',
-  },
-  consistencyLabel: {
-    color: '#94a3b8',
-    fontSize: 20,
-    fontFamily: 'monospace',
-    fontWeight: '600',
-  },
-  dotsContainer: {
-    flexDirection: 'row',
-    gap: 16,
-  },
-  dot: {
-    width: 22,
+  progressTrack: {
     height: 22,
+    backgroundColor: 'rgba(30, 20, 53, 0.9)',
     borderRadius: 11,
-    backgroundColor: '#271940',
-    borderWidth: 2,
-    borderColor: '#472d73',
+    borderWidth: 1.5,
+    borderColor: 'rgba(139, 92, 246, 0.5)',
+    overflow: 'hidden',
+    marginBottom: 28,
   },
-  dotFilled: {
-    backgroundColor: '#06b6d4',
-    borderColor: '#67e8f9',
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#22d3ee',
+    borderRadius: 11,
   },
-  consistencyCount: {
-    color: '#cbd5e1',
-    fontSize: 22,
-    fontFamily: 'monospace',
+  rollingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  rollingCol: {
+    alignItems: 'center',
+    gap: 10,
+  },
+  rollingDot: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2.5,
+  },
+  rollingDotActive: {
+    backgroundColor: '#7c3aed',
+    borderColor: '#22d3ee',
+  },
+  rollingDotInactive: {
+    backgroundColor: 'rgba(30, 20, 53, 0.7)',
+    borderColor: 'rgba(107, 114, 128, 0.6)',
+  },
+  rollingLabel: {
+    fontSize: 18,
     fontWeight: '700',
+    color: '#9ca3af',
+    letterSpacing: 1,
   },
-  repertoireContainer: {
-    backgroundColor: '#170e30',
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#3b2562',
-    padding: 32,
-  },
-  repertoireHeader: {
-    color: '#a78bfa',
-    fontSize: 22,
-    fontWeight: '700',
-    letterSpacing: 2,
-    fontFamily: 'monospace',
-    marginBottom: 20,
+  rollingLabelToday: {
+    color: '#22d3ee',
   },
   repertoireRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: 16,
+    gap: 20,
+  },
+  repertoireDivider: {
     borderBottomWidth: 1,
-    borderBottomColor: '#25153d',
+    borderBottomColor: 'rgba(124, 58, 237, 0.3)',
   },
-  pieceTitleCol: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginRight: 16,
-  },
-  pieceGlyph: {
-    color: '#c084fc',
-    fontSize: 24,
-    marginRight: 12,
-  },
-  pieceTitle: {
-    color: '#f8fafc',
+  repertoireIndex: {
     fontSize: 26,
-    fontWeight: '600',
+    fontWeight: '800',
+    color: '#22d3ee',
+    fontVariant: ['tabular-nums'],
   },
-  focusCol: {
-    backgroundColor: '#281745',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#5b21b6',
+  repertoireTextWrap: {
+    flex: 1,
   },
-  focusBadge: {
-    color: '#e9d5ff',
+  repertoireTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#f3f4f6',
+  },
+  repertoireSubtitle: {
     fontSize: 20,
-    fontWeight: '600',
-    fontFamily: 'monospace',
+    fontWeight: '500',
+    color: '#a78bfa',
+    marginTop: 2,
   },
 });
+
+export default CyberJuryLockscreen;

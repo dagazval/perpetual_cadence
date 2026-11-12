@@ -354,7 +354,7 @@ const captureLockscreenWallpaper = async () => {
           options={{ format: 'png', quality: 1.0, width: 1344, height: 2992 }}
         >
           <CyberJuryLockscreen
-            todayPracticeMinutes={todayPracticeMinutes}
+            todayPracticedMinutes={todayPracticeMinutes}
             rollingConsistencyDays={rollingConsistencyDays}
           />
         </ViewShot>
