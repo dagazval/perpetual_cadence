@@ -4,7 +4,7 @@ import {
   Music,
   Timer,
 } from 'lucide-react-native';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ScrollView,
@@ -122,7 +122,7 @@ function MainApp() {
     }
   };
 
-  // Triggered when a qualifying practice session is saved ("Stop Practice") or tags update
+// Triggered when a qualifying practice session is saved ("Stop Practice") or tags update
   const handleDataChanged = () => {
     try {
       setInstruments(db.getInstruments());
@@ -136,6 +136,17 @@ function MainApp() {
       console.error('[REFRESH ERROR]:', err);
     }
   };
+
+  // Sync practice sessions & active tags from Supabase on app launch (without re-rendering wallpaper)
+  useEffect(() => {
+    Promise.all([
+      db.syncPracticeSessionsFromCloud(),
+      db.syncTagsFromCloud(),
+    ]).then(() => {
+      setInstruments(db.getInstruments());
+      setRefreshTrigger((prev) => prev + 1);
+    });
+  }, []);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -200,8 +211,9 @@ function MainApp() {
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <PracticeStopwatch
               activeInstrument={activeInstrument}
+              refreshKey={refreshTrigger}
               onSessionSaved={handleDataChanged}
-            />
+          />
           </ScrollView>
         </View>
 

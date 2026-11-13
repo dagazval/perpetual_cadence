@@ -160,6 +160,50 @@ public async syncPracticeSessionsFromCloud(instrumentId?: string): Promise<void>
       console.error('[CLOUD SYNC EXCEPTION]:', err);
     }
   }
+
+  public async syncTagsFromCloud(): Promise<void> {
+    try {
+      const { data, error } = await supabase
+        .from('dim_tags')
+        .select('*')
+        .eq('status', 'active');
+
+      if (error) {
+        console.error('[SUPABASE TAG RESTORE ERROR]:', error.message);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        for (const row of data) {
+          // Avoid duplicates by checking instrument_id + case-insensitive tag_name
+          const existing = this.db.getFirstSync<{ tag_id: string }>(
+            `SELECT tag_id FROM dim_tags WHERE instrument_id = ? AND lower(trim(tag_name)) = lower(?);`,
+            [row.instrument_id, row.tag_name.trim()]
+          );
+
+          if (!existing) {
+            this.db.runSync(
+              `INSERT OR IGNORE INTO dim_tags 
+                (tag_id, user_id, instrument_id, tag_name, tag_type, status, source, created_at)
+               VALUES (?, ?, ?, ?, ?, 'active', ?, ?);`,
+              [
+                row.tag_id || `tag-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                row.user_id || CURRENT_USER_ID,
+                row.instrument_id,
+                row.tag_name.trim(),
+                row.tag_type || 'Technique Focus',
+                row.source || 'lesson_extracted',
+                row.created_at || new Date().toISOString(),
+              ]
+            );
+          }
+        }
+        console.log(`[LOCAL RECONCILIATION]: Synced ${data.length} active tag(s) from Supabase.`);
+      }
+    } catch (err) {
+      console.error('[CLOUD TAG SYNC EXCEPTION]:', err);
+    }
+  }
   
   private initDatabase(): void {
     try {

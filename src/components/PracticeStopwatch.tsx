@@ -13,10 +13,15 @@ import { db, DimInstrument, DimTag } from '../database/schema';
 
 interface PracticeStopwatchProps {
   activeInstrument: DimInstrument;
+  refreshKey?: number;
   onSessionSaved: () => void;
 }
 
-export function PracticeStopwatch({ activeInstrument, onSessionSaved }: PracticeStopwatchProps) {
+export function PracticeStopwatch({
+  activeInstrument,
+  refreshKey,
+  onSessionSaved,
+}: PracticeStopwatchProps) {
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [availableTags, setAvailableTags] = useState<DimTag[]>([]);
@@ -25,13 +30,13 @@ export function PracticeStopwatch({ activeInstrument, onSessionSaved }: Practice
   // Timestamp anchor for drift-free delta math
   const startedAtRef = useRef<number | null>(null);
 
-  // Load active tags for the selected instrument
+// Load active tags for the selected instrument (and refresh when cloud sync or tag approvals run)
   useEffect(() => {
     try {
       const tags = db.getTagsForInstrument(activeInstrument.instrument_id);
       setAvailableTags(tags);
 
-      // Default selection: select 'Warm Up' segment on initial load if present
+      // Default selection: select 'Warm Up' segment on initial load if none selected yet
       const warmUpTag = tags.find(
         (t) => t.tag_name.toLowerCase() === 'warm up' && t.tag_type === 'Session Segment'
       );
@@ -41,7 +46,7 @@ export function PracticeStopwatch({ activeInstrument, onSessionSaved }: Practice
     } catch (err) {
       console.error('[LOAD TAGS ERROR]:', err);
     }
-  }, [activeInstrument.instrument_id]);
+  }, [activeInstrument.instrument_id, refreshKey]);
 
   // AppState listener: Recalculate exact delta whenever app returns from background / sleep
   useEffect(() => {
