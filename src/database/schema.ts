@@ -163,6 +163,31 @@ public async syncPracticeSessionsFromCloud(instrumentId?: string): Promise<void>
 
   public async syncTagsFromCloud(): Promise<void> {
     try {
+      // 1. Ensure local dim_instruments matches Supabase UUIDs first
+      const { data: cloudInstruments } = await supabase
+        .from('dim_instruments')
+        .select('*');
+
+      if (cloudInstruments && cloudInstruments.length > 0) {
+        for (const inst of cloudInstruments) {
+          this.db.runSync(
+            `INSERT OR IGNORE INTO dim_instruments 
+              (instrument_id, user_id, name, target_days_rolling_week, current_xp, current_level, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?);`,
+            [
+              inst.instrument_id,
+              inst.user_id || CURRENT_USER_ID,
+              inst.name,
+              inst.target_days_rolling_week ?? 4,
+              inst.current_xp ?? 0,
+              inst.current_level ?? 1,
+              inst.created_at || new Date().toISOString(),
+            ]
+          );
+        }
+      }
+
+      // 2. Pull active tags from Supabase
       const { data, error } = await supabase
         .from('dim_tags')
         .select('*')
@@ -175,7 +200,6 @@ public async syncPracticeSessionsFromCloud(instrumentId?: string): Promise<void>
 
       if (data && data.length > 0) {
         for (const row of data) {
-          // Avoid duplicates by checking instrument_id + case-insensitive tag_name
           const existing = this.db.getFirstSync<{ tag_id: string }>(
             `SELECT tag_id FROM dim_tags WHERE instrument_id = ? AND lower(trim(tag_name)) = lower(?);`,
             [row.instrument_id, row.tag_name.trim()]
@@ -187,7 +211,7 @@ public async syncPracticeSessionsFromCloud(instrumentId?: string): Promise<void>
                 (tag_id, user_id, instrument_id, tag_name, tag_type, status, source, created_at)
                VALUES (?, ?, ?, ?, ?, 'active', ?, ?);`,
               [
-                row.tag_id || `tag-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                row.tag_id,
                 row.user_id || CURRENT_USER_ID,
                 row.instrument_id,
                 row.tag_name.trim(),
